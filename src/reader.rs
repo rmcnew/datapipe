@@ -8,6 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::net::UdpSocket;
 
 /// Reader trait to simplify reading from various input sources
+#[allow(async_fn_in_trait)]
 pub trait InputReader {
     async fn read(&mut self) -> Result<Bytes, Error>;
 }

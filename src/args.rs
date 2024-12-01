@@ -37,6 +37,15 @@ pub struct HttpInputArgs {
     pub http_input_rate: Option<u64>,    
 }
 
+/// Additional parameters for decrypting input
+#[derive(Args, Debug, Clone)]
+#[group(required = false, multiple = true)]
+pub struct DecryptionInputArgs {
+    /// --decrypt  decryption key to use
+    #[arg(long = "decrypt")]
+    pub decryption_key: Option<String>,
+}
+
 /// Choose one or more output destinations
 #[derive(Args, Debug, Clone)]
 #[group(required = true, multiple = true)]
@@ -95,6 +104,15 @@ pub struct TlsOutputArgs {
     /// --tls-skip-server-verify  do not verify the server identity; for testing or closed, self-signed networks
     #[arg(long = "tls-skip-server-verify")]
     pub tls_skip_server_verify: Option<bool>, 
+}
+
+/// Additional parameters for encrypting output
+#[derive(Args, Debug, Clone)]
+#[group(required = false, multiple = true)]
+pub struct EncryptionOutputArgs {
+    /// --encrypt  encryption key to use
+    #[arg(long = "encrypt")]
+    pub encryption_key: Option<String>,
 }
 
 /// Overall command line args

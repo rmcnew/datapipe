@@ -1,10 +1,10 @@
 // Do simple data forwarding from one input to one or more outputs
 use clap::Parser;
 use datapipe::args::ProgramArgs;
+use datapipe::logger::init_logger;
 use datapipe::reader::{InputReader, get_input_reader};
 use datapipe::writer::{OutputWriter, get_output_writers};
 use log::{error, info, trace, warn};
-use datapipe::logger::init_logger;
 use std::net::ToSocketAddrs;
 use std::process::ExitCode;
 use tokio::sync::mpsc::channel;
