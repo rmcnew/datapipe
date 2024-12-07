@@ -1,5 +1,6 @@
 use clap::{Args, Parser};
 use std::path::PathBuf;
+use crate::engine::Parameters;
 
 /// Choose one input source
 #[derive(Args, Debug, Clone)]
@@ -129,3 +130,60 @@ pub struct ProgramArgs {
     #[command(flatten)]
     pub tls_output: TlsOutputArgs,
 }
+
+impl ProgramArgs {
+
+    pub async fn to_parameters(&self) -> Result<Parameters, std::io::Error> {
+        /*
+        // parse input UDP address if present
+        if args.input.udp_input.is_some()
+            && !good_tcp_udp_address(args.input.udp_input.clone().unwrap().as_str())
+        {
+            eprintln!(
+                "Invalid UDP input address: {}",
+                args.input.udp_input.unwrap()
+            );
+            return ExitCode::FAILURE;
+        }
+        // parse HTTP input URL if present
+        if args.input.http_input.is_some() && !good_url(args.input.http_input.clone().unwrap().as_str())
+        {
+            eprintln!("Invalid HTTP input URL: {}", args.input.http_input.unwrap());
+            return ExitCode::FAILURE;
+        }
+        // parse output UDP address if present
+        if args.output.udp_output.is_some() {
+            let addresses = args.output.udp_output.clone().unwrap();
+            for address in addresses {
+                if !good_tcp_udp_address(&address) {
+                    eprintln!("Invalid UDP output address: {}", address);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        // parse HTTP output URL if present
+        if args.output.http_output.is_some()
+            && !good_url(args.output.http_output.clone().unwrap().as_str())
+        {
+            eprintln!(
+                "Invalid HTTP output URL: {}",
+                args.output.http_output.unwrap()
+            );
+            return ExitCode::FAILURE;
+        }
+        // parse TLS (TCP) address if present
+        if args.output.tls_output.is_some() {
+            let addresses = args.output.tls_output.clone().unwrap();
+            for address in addresses {
+                if !good_tcp_udp_address(&address) {
+                    eprintln!("Invalid TLS output address: {}", address);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        */
+
+        Ok(Parameters::default())
+    }
+}
+

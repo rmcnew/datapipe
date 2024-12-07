@@ -1,172 +1,12 @@
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use crate::args::ProgramArgs;
-use log::{error, info, trace};
-use reqwest::StatusCode;
-use std::io::{Error, ErrorKind, SeekFrom};
-use std::path::Path;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::net::UdpSocket;
-
-/// Reader trait to simplify reading from various input sources
-#[allow(async_fn_in_trait)]
-pub trait InputReader {
-    async fn read(&mut self) -> Result<Bytes, Error>;
-}
-
-/// Reader for STDIN
-pub struct StdinReader {}
-
-impl StdinReader {
-    fn new() -> Self {
-        Self {}
-    }
-}
-
-impl InputReader for StdinReader {
-    async fn read(&mut self) -> Result<Bytes, Error> {
-        let mut bytes = BytesMut::new();
-        match tokio::io::stdin().read_buf(&mut bytes).await {
-            Ok(_bytes_read) => Ok(bytes.freeze()),
-            Err(error) => Err(error),
-        }
-    }
-}
-
-/// Reader for files
-pub struct FileReader {
-    file: tokio::fs::File,
-}
-
-impl FileReader {
-    async fn new(pathref: &Path) -> Result<Self, Error> {
-        Ok(Self {
-            file: tokio::fs::OpenOptions::new()
-                .read(true)
-                .open(pathref)
-                .await?,
-        })
-    }
-}
-
-impl InputReader for FileReader {
-    async fn read(&mut self) -> Result<Bytes, Error> {
-        let position = self.file.seek(SeekFrom::Current(0)).await?;
-        trace!("Reading input file at position {}", position);
-        let mut bytes = BytesMut::new();
-        match self.file.read_buf(&mut bytes).await {
-            Ok(_bytes_read) => Ok(bytes.freeze()),
-            Err(error) => Err(error),
-        }
-    }
-}
-
-/// Reader for UDP
-pub struct UdpReader {
-    socket: UdpSocket,
-}
-
-impl UdpReader {
-    async fn new(address: &str) -> Result<UdpReader, Error> {
-        trace!("UdpReader listening on {}", address);
-        match UdpSocket::bind(address).await {
-            Ok(socket) => Ok(UdpReader { socket }),
-            Err(error) => Err(error),
-        }
-    }
-}
-
-impl InputReader for UdpReader {
-    async fn read(&mut self) -> Result<Bytes, Error> {
-        let mut vec_bytes = Vec::with_capacity(512);
-        match self.socket.recv_buf_from(&mut vec_bytes).await {
-            Ok((_length, _source_address)) => {
-                trace!(
-                    "UdpReader received {} bytes from {}",
-                    _length,
-                    _source_address
-                );
-                Ok(Bytes::from(vec_bytes))
-            }
-            Err(error) => Err(error),
-        }
-    }
-}
-
-/// Reader for HTTP
-pub struct HttpReader {
-    client: reqwest::Client,
-    url: url::Url,    
-    update_interval: tokio::time::Interval,
-}
-
-
-impl HttpReader {
-    fn new(http_input_url: &str, update_rate: u64) -> Result<HttpReader, Error> {
-        // HTTP client init and configuration
-        match url::Url::parse(http_input_url) {
-            Ok(url) => {
-                Ok(Self {
-                    client: reqwest::Client::new(),
-                    url,
-                    update_interval: tokio::time::interval(std::time::Duration::from_millis(update_rate)),
-                })
-            }
-            Err(error) => {
-                let error_message = format!("Error parsing http-input URL: {}", error);
-                error!("{}", error_message);
-                Err(Error::new(ErrorKind::InvalidInput, error_message))
-            }
-        }
-        
-    }
-}
-
-impl InputReader for HttpReader {
-    async fn read(&mut self) -> Result<Bytes, Error> {
-        self.update_interval.tick().await;  // wait until it is time to read
-        match self.client.get(self.url.as_str()).send().await {
-            Ok(response) => {
-                trace!("HttpInput:  Web server response is: {:?}", response);
-                match response.status() {
-                    StatusCode::OK => {
-                        trace!("HttpInput:  Status is OK. Getting response body bytes");
-                        match response.bytes().await {
-                            Ok(bytes) => Ok(bytes),                            
-                            Err(error) => {
-                                let error_message = format!(
-                                    "HttpInput:  Error converting response body to bytes: {}",
-                                    error
-                                );
-                                error!("{}", error_message);
-                                Err(Error::new(ErrorKind::Other, error_message))
-                            }
-                        }
-                    }
-                    _ => {
-                        error!("HttpInput:  non-Ok status from web server: {:?}", response);
-                        match response.error_for_status() {
-                            Ok(res) => {
-                                let error_message = format!("HttpInput:  Failed converting web server response to error: {:?}", res);
-                                error!("{}", error_message);
-                                Err(Error::new(ErrorKind::Other, error_message))
-                            }
-                            Err(error) => {
-                                let error_message = format!("HttpInput:  decoded web server status: {}", error);
-                                error!("{}", error_message);
-                                Err(Error::new(ErrorKind::Other, error_message))
-                            }
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                let error_message = format!("HttpInput:  Error getting HTTP input: {}", error);
-                error!("{}", error_message);
-                Err(Error::new(ErrorKind::NotConnected, error_message))
-            }
-        }
-    }
-}
+use crate::datapipe_types::InputReader;
+use crate::stdin_reader::StdinReader;
+use crate::file_reader::FileReader;
+use crate::http_reader::HttpReader;
+use crate::udp_reader::UdpReader;
+use log::{error, info};
+use std::io::{Error, ErrorKind};
 
 /// Reader enum holds all input implementations
 pub enum Reader {
@@ -185,6 +25,12 @@ impl InputReader for Reader {
             Self::Udp(udp_reader) => udp_reader.read().await,
             Self::Http(http_reader) => http_reader.read().await,
         }
+    }
+}
+
+impl std::default::Default for Reader {
+    fn default() -> Self {
+        Self::Stdin(StdinReader::new())
     }
 }
 
