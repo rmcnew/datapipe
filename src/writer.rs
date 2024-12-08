@@ -3,7 +3,7 @@ use crate::datapipe_types::OutputWriter;
 use crate::file_writer::FileWriter;
 use crate::http_writer::HttpWriter;
 use crate::stdout_writer::StdoutWriter;
-use crate::tls_writer::TlsWriter;
+use crate::tls_reader_writer::TlsReaderWriter;
 use crate::udp_writer::UdpWriter;
 use log::{error, info};
 use rustls_pemfile::{certs, private_key};
@@ -30,7 +30,7 @@ pub enum Writer {
     File(FileWriter),
     Udp(UdpWriter),
     Http(HttpWriter),
-    Tls(TlsWriter),
+    Tls(TlsReaderWriter),
 }
 
 impl OutputWriter for Writer {
@@ -125,7 +125,7 @@ pub async fn get_output_writers(args: &ProgramArgs) -> Result<Vec<Writer>, Error
         let addresses = args.output.tls_output.as_ref().unwrap();
         for address in addresses {
             match get_tls_config(args) {
-                Ok(tls_config) => match TlsWriter::new(address.to_owned(), tls_config).await {
+                Ok(tls_config) => match TlsReaderWriter::new(address.to_owned(), tls_config).await {
                     Ok(tls_writer) => {
                         writers.push(Writer::Tls(tls_writer));
                         info!("Using TLS output");

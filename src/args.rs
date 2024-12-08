@@ -18,6 +18,9 @@ pub struct InputArgs {
     /// --tcp-input  read input from TCP address
     #[arg(long = "tcp-input")]
     pub tcp_input: Option<String>,
+    /// --tcp-listen-input  open a local port to receive a TCP connection
+    #[arg(long = "tcp-listen-input")]
+    pub tcp_listen_input: Option<String>,
     /// --tls-input  read input from TLS address
     #[arg(long = "tls-input")]
     pub tls_input: Option<String>,

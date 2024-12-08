@@ -1,23 +1,22 @@
 /// Writer for TLS (TCP with TLS encryption)
-
-use crate::datapipe_types::OutputWriter;
+use bytes::Bytes;
+use crate::datapipe_types::{InputReader, OutputWriter};
 use log::{error, info};
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::TlsConnector;
 
-
-pub struct TlsWriter {
+pub struct TlsReaderWriter {
     tls_stream: TlsStream<TcpStream>,
 }
 
-impl TlsWriter {
-    pub async fn new(address: String, tls_config: ClientConfig) -> Result<TlsWriter, Error> {
+impl TlsReaderWriter {
+    pub async fn new(address: String, tls_config: ClientConfig) -> Result<Self, Error> {
         let tls_connector = TlsConnector::from(Arc::new(tls_config));
         // connect a "basic" TCP stream
         info!("Connecting to TCP address: {}", &address);
@@ -26,8 +25,9 @@ impl TlsWriter {
                 // get the domain name
                 let address_domain = get_domain(&address);
                 match ServerName::try_from(address_domain.to_owned()) {
+                    // use the TlsConnector to "upgrade" the TCP stream to TLS
                     Ok(domain) => match tls_connector.connect(domain, tcp_stream).await {
-                        Ok(tls_stream) => Ok(TlsWriter { tls_stream }),
+                        Ok(tls_stream) => Ok(Self{ tls_stream }),
                         Err(error) => {
                             let error_message = format!("TLS connection error: {}", error);
                             error!("{}", error_message);
@@ -48,17 +48,23 @@ impl TlsWriter {
                 error!("{}", error_message);
                 Err(Error::new(ErrorKind::NotConnected, error_message))
             }
-        }
-        // use the TlsConnector to "upgrade" the TCP stream to TLS
+        }        
     }
 }
 
-impl OutputWriter for TlsWriter {
+impl InputReader for TlsReaderWriter {
+    async fn read(&mut self) -> Result<bytes::Bytes, Error> {
+        let mut vec_bytes = Vec::with_capacity(512);
+        self.tls_stream.read(&mut vec_bytes).await?;
+        Ok(Bytes::from(vec_bytes))
+    }
+}
+
+impl OutputWriter for TlsReaderWriter {
     async fn write(&mut self, bytes: &[u8]) -> Result<(), Error> {
         self.tls_stream.write_all(bytes).await
     }
 }
-
 
 #[test]
 fn test_get_domain() {
