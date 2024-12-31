@@ -1,7 +1,7 @@
 /// Reader for HTTP
 
 use bytes::Bytes;
-use crate::datapipe_types::InputReader;
+use crate::datapipe_types::{good_url, InputReader};
 use log::{error, trace};
 use reqwest::StatusCode;
 use std::io::{Error, ErrorKind};
@@ -14,23 +14,14 @@ pub struct HttpReader {
 
 
 impl HttpReader {
-    pub fn new(http_input_url: &str, update_rate: u64) -> Result<HttpReader, Error> {
+    pub fn new(http_input_url: &str, update_rate: u64) -> Result<Self, Error> {
         // HTTP client init and configuration
-        match url::Url::parse(http_input_url) {
-            Ok(url) => {
-                Ok(Self {
-                    client: reqwest::Client::new(),
-                    url,
-                    update_interval: tokio::time::interval(std::time::Duration::from_millis(update_rate)),
-                })
-            }
-            Err(error) => {
-                let error_message = format!("Error parsing http-input URL: {}", error);
-                error!("{}", error_message);
-                Err(Error::new(ErrorKind::InvalidInput, error_message))
-            }
-        }
-        
+        let url = good_url(http_input_url, "http://")?;
+        Ok(Self {
+            client: reqwest::Client::new(),
+            url,
+            update_interval: tokio::time::interval(std::time::Duration::from_millis(update_rate)),
+        })
     }
 }
 

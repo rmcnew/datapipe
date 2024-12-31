@@ -11,20 +11,23 @@ const RETRY_MAX: i32 = 5; // retry failed reads or writes up to this many consec
 /// This struct gives all the parameters needed to start a datapipe instance
 pub struct Parameters {
     pub reader: Reader,
-    pub writers: Vec<Writer>
+    pub maybe_decryption_key: Option<String>,
+    pub maybe_encryption_key: Option<String>,    
+    pub writers: Vec<Writer>,    
 }
 
 impl std::default::Default for Parameters {
     fn default() -> Self {
         Self {
             reader: Reader::default(),
+            maybe_decryption_key: None,
+            maybe_encryption_key: None,
             writers: vec![Writer::default()]
         }
     }
 }
 
-pub async fn run_data_pipe(parameters: Parameters) {
-    
+pub async fn run_data_pipe(parameters: Parameters) {    
     // vec to track child threads
     let mut children = Vec::new();    
     // setup queue from reader thread to writer thread
@@ -71,7 +74,11 @@ pub async fn run_data_pipe(parameters: Parameters) {
         
     });
     children.push(reader_handle);
-    // 2)  writer thread to write output queue
+    // 2)  Decryption thread (if specified)
+
+    // 3)  Encryption thread (if specified)
+    
+    // 4)  writer thread to write output queue
     let writer_handle = tokio::spawn(async move {
         let mut writers = parameters.writers;
         let mut write_retry_count = 0;            

@@ -1,10 +1,10 @@
 /// Writer for HTTP 
 
-use crate::datapipe_types::OutputWriter;
+use crate::datapipe_types::{good_url, OutputWriter};
 use log::{error, trace};
 use std::io::{Error, ErrorKind};
 use std::time::{Duration, Instant};
-use url::Url;
+
 
 pub struct HttpWriter {
     client: reqwest::Client,
@@ -18,41 +18,21 @@ pub struct HttpWriter {
     buffer_index: usize,  // the current position in the buffer that we have scanned to    
 }
 
-fn good_url(maybe_url: &str) -> bool {
-    if maybe_url.starts_with("http://") || maybe_url.starts_with("https://") {
-        match Url::parse(maybe_url) {
-            Ok(_url) => return true,
-            Err(_parse_error) => return false,
-        }
-    }
-    eprintln!("Output URL must start with 'http://' or 'https://'");
-    false
-}
-
 impl HttpWriter {    
-    pub fn new(http_output_url: &str, http_output_delimiter: Vec<u8>, http_output_include_delimiter: bool, http_output_rate: Duration) -> Result<HttpWriter, Error> {
+    pub fn new(http_output_url: &str, http_output_delimiter: Vec<u8>, http_output_include_delimiter: bool, http_output_rate: Duration) -> Result<Self, Error> {
         // HTTP client init and configuration
-        match url::Url::parse(http_output_url) {
-            Ok(url) => {                
-                Ok(Self {
-                    client: reqwest::Client::new(),
-                    url,
-                    delimiter: http_output_delimiter,
-                    include_delimiter: http_output_include_delimiter,
-                    output_rate: http_output_rate.clone(),
-                    last_output: Instant::now() - http_output_rate, // backdate so we can write immediately after initialization
-                    payload: Vec::new(),
-                    buffer: Vec::new(),
-                    buffer_index: 0,                    
-                })
-            }
-            Err(error) => {
-                let error_message = format!("Error parsing http-output URL: {}", error);
-                error!("{}", error_message);
-                Err(Error::new(ErrorKind::InvalidInput, error_message))
-            }
-        }
-        
+        let url = good_url(http_output_url, "http://")?;
+        Ok(Self {
+            client: reqwest::Client::new(),
+            url,
+            delimiter: http_output_delimiter,
+            include_delimiter: http_output_include_delimiter,
+            output_rate: http_output_rate.clone(),
+            last_output: Instant::now() - http_output_rate, // backdate so we can write immediately after initialization
+            payload: Vec::new(),
+            buffer: Vec::new(),
+            buffer_index: 0,                    
+        })
     }
 
     fn scan_for_delimiter(&mut self) -> bool {

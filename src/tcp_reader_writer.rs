@@ -7,6 +7,7 @@ use std::io::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
+const TCP_READ_BUFFER_SIZE: usize = 2048;
 
 pub struct TcpReaderWriter {
     tcp_stream: TcpStream,
@@ -25,7 +26,7 @@ impl TcpReaderWriter {
 impl InputReader for TcpReaderWriter {
     async fn read(&mut self) -> Result<Bytes, Error> {
         self.tcp_stream.readable().await?;
-        let mut vec_bytes = Vec::with_capacity(512);
+        let mut vec_bytes = Vec::with_capacity(TCP_READ_BUFFER_SIZE);
         match self.tcp_stream.try_read(&mut vec_bytes) {
             Ok(_length) => {
                 trace!("TcpReaderWriter received {} bytes", _length);

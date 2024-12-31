@@ -10,12 +10,12 @@ pub struct UdpWriter {
 }
 
 impl UdpWriter {
-    pub async fn new(address: &str) -> Result<UdpWriter, Error> {
+    pub async fn new(address: &str) -> Result<Self, Error> {
         trace!("UdpWriter connecting to {}", address);
         match UdpSocket::bind("0.0.0.0:0").await {
             // let the OS choose the local port
             Ok(socket) => match socket.connect(address).await {
-                Ok(()) => Ok(UdpWriter { socket }),
+                Ok(()) => Ok(Self { socket }),
                 Err(error) => {
                     let error_message = format!("UDP connection error {}: {}", &address, error);
                     error!("{}", error_message);

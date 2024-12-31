@@ -7,6 +7,7 @@ use log::{error, trace};
 use std::io::{Error, ErrorKind};
 use tokio::net::{TcpListener, TcpStream};
 
+const TCP_LISTEN_READ_BUFFER_SIZE: usize = 2048;
 
 pub struct TcpListenReader {
     tcp_listener: TcpListener,
@@ -45,7 +46,7 @@ impl InputReader for TcpListenReader {
         match &self.maybe_tcp_stream {
             Some(tcp_stream) => {
                 tcp_stream.readable().await?;
-                let mut vec_bytes = Vec::with_capacity(512);
+                let mut vec_bytes = Vec::with_capacity(TCP_LISTEN_READ_BUFFER_SIZE);
                 match tcp_stream.try_read(&mut vec_bytes) {
                     Ok(_length) => {
                         trace!("TcpReader received {} bytes", _length);
