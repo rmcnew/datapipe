@@ -11,6 +11,7 @@ use crate::udp_reader::UdpReader;
 use std::io::Error;
 
 /// Reader enum holds all input implementations
+#[derive(Debug)]
 pub enum Reader {    
     File(FileReader),
     Http(HttpReader),

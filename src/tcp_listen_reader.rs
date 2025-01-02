@@ -9,6 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 const TCP_LISTEN_READ_BUFFER_SIZE: usize = 2048;
 
+#[derive(Debug)]
 pub struct TcpListenReader {
     tcp_listener: TcpListener,
     maybe_tcp_stream: Option<TcpStream>,

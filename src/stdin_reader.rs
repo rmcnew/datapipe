@@ -4,6 +4,7 @@ use crate::datapipe_types::InputReader;
 use std::io::Error;
 use tokio::io::AsyncReadExt;
 
+#[derive(Debug)]
 pub struct StdinReader {}
 
 impl StdinReader {

@@ -11,6 +11,7 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::TlsConnector;
 
+#[derive(Debug)]
 pub struct TlsReaderWriter {
     tls_stream: TlsStream<TcpStream>,
 }

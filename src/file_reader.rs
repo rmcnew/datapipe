@@ -7,6 +7,7 @@ use std::path::Path;
 use std::io::{Error, SeekFrom};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
+#[derive(Debug)]
 pub struct FileReader {
     file: tokio::fs::File,
 }

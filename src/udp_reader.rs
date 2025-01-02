@@ -6,7 +6,7 @@ use log::trace;
 use std::io::Error;
 use tokio::net::UdpSocket;
 
-
+#[derive(Debug)]
 pub struct UdpReader {
     socket: UdpSocket,
 }

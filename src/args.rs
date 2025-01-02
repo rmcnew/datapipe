@@ -48,7 +48,7 @@ pub struct InputArgs {
     #[arg(long = "https-input")]
     pub https_input: Option<String>,    
     /// --stdin-input  read input from STDIN
-    #[arg(long = "stdin-input")]
+    #[arg(long = "stdin-input", default_value_t = false)]
     pub stdin_input: bool,
     /// --tcp-input  read input from TCP address
     #[arg(long = "tcp-input")]
@@ -90,11 +90,29 @@ pub struct HttpsInputArgs {
     #[arg(long = "https-input-client-identity")]
     pub https_input_client_identity: Option<PathBuf>,
     /// --https-input-accept-invalid-hostnames  DANGER! Do not validate hostnames in HTTPS setup.  Use with caution.  DANGER!
-    #[arg(long = "https-input-accept-invalid-hostnames", default_value_t = false)]
-    pub https_input_accept_invalid_hostnames: bool,
+    #[arg(long = "https-input-accept-invalid-hostnames")]
+    pub https_input_accept_invalid_hostnames: Option<bool>,
     /// --https-input-accept-invalid-certificates  DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
-    #[arg(long = "https-input-accept-invalid-certificates", default_value_t = false)]
-    pub https_input_accept_invalid_certificates: bool,
+    #[arg(long = "https-input-accept-invalid-certificates")]
+    pub https_input_accept_invalid_certificates: Option<bool>,
+}
+
+/// Additional parameters needed for TLS input
+#[derive(Args, Debug, Clone)]
+#[group(required = false, multiple = true)]
+pub struct TlsInputArgs {
+    /// --tls-input-cert-chain  TLS certificate chain file to use
+    #[arg(long = "tls-input-cert-chain")]
+    pub tls_input_cert_chain: Option<PathBuf>,
+    /// --tls-input-client-key  TLS client certificate to use
+    #[arg(long = "tls-input-client-key")]
+    pub tls_input_client_key: Option<PathBuf>,
+    /// --tls-input-root-ca  use these CAs instead of web root CAs
+    #[arg(long = "tls-input-root-ca")]
+    pub tls_input_root_ca: Option<PathBuf>,
+    /// --tls-input-skip-server-verify  DANGER! Do not validate server identity.  Use with caution. DANGER!
+    #[arg(long = "tls-input-skip-server-verify", default_value_t = false)]
+    pub tls_input_skip_server_verify: bool, 
 }
 
 /// Additional parameters for decrypting input
@@ -106,31 +124,40 @@ pub struct DecryptionArgs {
     pub decryption_key: Option<String>,
 }
 
+/// Additional parameters for encrypting output
+#[derive(Args, Debug, Clone)]
+#[group(required = false, multiple = true)]
+pub struct EncryptionArgs {
+    /// --encrypt  encryption key to use
+    #[arg(long = "encrypt")]
+    pub encryption_key: Option<String>,
+}
+
 /// Choose one or more output destinations
 #[derive(Args, Debug, Clone)]
 #[group(required = true, multiple = true)]
-pub struct OutputArgs {
+pub struct OutputArgs {    
+    /// --file-output  write output to file
+    #[arg(long = "file-output")]
+    pub file_output: Option<Vec<PathBuf>>,    
+    /// --http-output  write output to HTTP URL
+    #[arg(long = "http-output")]
+    pub http_output: Option<Vec<String>>,
+    /// --https-output  write output to HTTPS URL; requires http-output-rate and optionally delimiter
+    #[arg(long = "https-output")]
+    pub https_output: Option<Vec<String>>,
     /// --stdout-output  write output to STDOUT
     #[arg(long = "stdout-output")]
     pub stdout_output: bool,
-    /// --file-output  write output to file
-    #[arg(long = "file-output")]
-    pub file_output: Option<Vec<PathBuf>>,
-    /// --udp-output  write output to UDP address
-    #[arg(long = "udp-output")]
-    pub udp_output: Option<Vec<String>>,
     /// --tcp-output  write output to TCP address
     #[arg(long = "tcp-output")]
     pub tcp_output: Option<Vec<String>>,
     /// --tls-output  write output to TCP/TLS URL
     #[arg(long = "tls-output")]
     pub tls_output: Option<Vec<String>>,
-    /// --http-output  write output to HTTP URL
-    #[arg(long = "http-output")]
-    pub http_output: Option<String>,
-    /// --https-output  write output to HTTPS URL
-    #[arg(long = "https-output")]
-    pub https_output: Option<String>,
+    /// --udp-output  write output to UDP address
+    #[arg(long = "udp-output")]
+    pub udp_output: Option<Vec<String>>,
 }
 
 /// Additional parameters needed for HTTP output
@@ -139,41 +166,58 @@ pub struct OutputArgs {
 pub struct HttpOutputArgs {
     /// --http-output-rate  in milliseconds, how often should data be sent to the output web address?
     #[arg(long = "http-output-rate")]
-    pub http_output_rate: Option<u64>,    
+    pub http_output_rate: Option<Vec<u64>>,    
     /// --http-output-delimiter  this delimiter is used to group the output into one or more 'segments' that will be sent in each request
     #[arg(long = "http-output-delimiter")]
-    pub http_output_delimiter: Option<Vec<u8>>,
+    pub http_output_delimiter: Option<Vec<Vec<u8>>>,
     /// --http-output-include-delimiter  should the delimiter be included with the segment that preceeds it?
     #[arg(long = "http-output-include-delimiter")]
-    pub http_output_include_delimiter: Option<bool>,
+    pub http_output_include_delimiter: Option<Vec<bool>>,
+}
+
+/// Additional parameters for HTTPS output
+#[derive(Args, Debug, Clone)]
+#[group(required = false, multiple = true)]
+pub struct HttpsOutputArgs {
+    /// --https-output-rate  in milliseconds, how often should the output web address be polled?
+    #[arg(long = "https-output-rate")]
+    pub https_output_rate: Option<Vec<u64>>,    
+    /// --https-output-root-certificate  path to custom root certificate file to use in PEM format
+    #[arg(long = "https-output-root-certificate")]
+    pub https_output_root_certificate: Option<Vec<PathBuf>>,
+    /// --https-output-certificate-revocation-list  path to custom certificate revocation list file to use in PEM format
+    #[arg(long = "https-output-certificate-revocation-list")]
+    pub https_output_certificate_revocation_list: Option<Vec<PathBuf>>,
+    /// --https-output-client-identity  path to client's custom private key and X509 certificate in PEM format.  Private key must be in RSA, SEC1 Elliptic Curve, or PKCS#8 format.
+    #[arg(long = "https-output-client-identity")]
+    pub https_output_client_identity: Option<Vec<PathBuf>>,
+    /// --https-output-accept-invalid-hostnames  DANGER! Do not validate hostnames in HTTPS setup.  Use with caution.  DANGER!
+    #[arg(long = "https-output-accept-invalid-hostnames")]
+    pub https_output_accept_invalid_hostnames: Option<Vec<bool>>,
+    /// --https-output-accept-invalid-certificates  DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
+    #[arg(long = "https-output-accept-invalid-certificates")]
+    pub https_output_accept_invalid_certificates: Option<Vec<bool>>,
 }
 
 /// Additional parameters needed for TLS output
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
 pub struct TlsOutputArgs {
-    /// --tls-cert-chain  TLS certificate chain file to use
-    #[arg(long = "tls-cert-chain")]
-    pub tls_cert_chain: Option<PathBuf>,
-    /// --tls-client-key  TLS client certificate to use
-    #[arg(long = "tls-client-key")]
-    pub tls_client_key: Option<PathBuf>,
-    /// --tls-root-ca  use these CAs instead of web root CAs
-    #[arg(long = "tls-root-ca")]
-    pub tls_root_ca: Option<PathBuf>,
-    /// --tls-skip-server-verify  do not verify the server identity; for testing or closed, self-signed networks
-    #[arg(long = "tls-skip-server-verify")]
-    pub tls_skip_server_verify: Option<bool>, 
+    /// --tls-output-cert-chain  TLS certificate chain file to use
+    #[arg(long = "tls-output-cert-chain")]
+    pub tls_output_cert_chain: Option<Vec<PathBuf>>,
+    /// --tls-output-client-key  TLS client certificate to use
+    #[arg(long = "tls-output-client-key")]
+    pub tls_output_client_key: Option<Vec<PathBuf>>,
+    /// --tls-output-root-ca  use these CAs instead of web root CAs
+    #[arg(long = "tls-output-root-ca")]
+    pub tls_output_root_ca: Option<Vec<PathBuf>>,
+    /// --tls-output-skip-server-verify  DANGER! Do not validate server identity.  Use with caution. DANGER!
+    #[arg(long = "tls-output-skip-server-verify")]
+    pub tls_output_skip_server_verify: Option<Vec<bool>>, 
 }
 
-/// Additional parameters for encrypting output
-#[derive(Args, Debug, Clone)]
-#[group(required = false, multiple = true)]
-pub struct EncryptionOutputArgs {
-    /// --encrypt  encryption key to use
-    #[arg(long = "encrypt")]
-    pub encryption_key: Option<String>,
-}
+
 
 /// Overall command line args
 #[derive(Parser, Debug, Clone)]
@@ -183,72 +227,141 @@ pub struct ProgramArgs {
     #[command(flatten)]
     pub http_input: HttpInputArgs,
     #[command(flatten)]
+    pub https_input: HttpsInputArgs,
+    #[command(flatten)]
+    pub tls_input: TlsInputArgs,
+    #[command(flatten)]
+    pub decryption_args: DecryptionArgs,
+    #[command(flatten)]
+    pub encryption_args: EncryptionArgs,
+    #[command(flatten)]
     pub output: OutputArgs,
     #[command(flatten)]
     pub http_output: HttpOutputArgs,
     #[command(flatten)]
+    pub https_output: HttpsOutputArgs,
+    #[command(flatten)]
     pub tls_output: TlsOutputArgs,
 }
 
-/// Select the wanted input implementation from the command line args
-pub async fn get_input_reader(args: &ProgramArgs) -> Result<Reader, Error> {
-    let reader: Reader;
-    if args.input.stdin_input {
-        reader = Reader::Stdin(StdinReader::new());
-        info!("Using STDIN input");
-    } else if args.input.file_input.is_some() {
-        let file_path = args.input.file_input.as_ref().unwrap();
-        match FileReader::new(file_path).await {
-            Ok(file_reader) => {
-                reader = Reader::File(file_reader);
-                info!("Using FILE input");
-            }
-            Err(error) => {
-                let error_message = format!("File input error {:?}: {}", file_path, error);
-                error!("{}", error_message);
-                return Err(Error::new(error.kind(), error_message));
-            }
+/// Ensure that the input reader is set only once
+fn check_reader_set(maybe_reader: &Option<Reader>) -> Result<(), Error> {
+    match maybe_reader.as_ref() {
+        Some(reader) => {
+            let error_message = format!("Input previously assigned as {:?}; only one input can be used.", reader);
+            error!("{}", error_message);
+            Err(Error::new(ErrorKind::AlreadyExists, error_message))
+        }        
+        None => Ok(())
+    }    
+}
+
+/// Prepare a reader for file input
+async fn handle_file_input(args: &ProgramArgs) -> Result<Reader, Error> {    
+    let file_path = args.input.file_input.as_ref().unwrap(); // is_some checked in parent function
+    match FileReader::new(file_path).await {
+        Ok(file_reader) => {
+            info!("Using FILE input");
+            Ok(Reader::File(file_reader))            
         }
-    } else if args.input.udp_input.is_some() {
-        let address = args.input.udp_input.as_ref().unwrap();
-        match UdpReader::new(address).await {
-            Ok(udp_reader) => {
-                reader = Reader::Udp(udp_reader);
-                info!("Using UDP input");
-            }
-            Err(error) => {
-                let error_message =
-                    format!("Cannot open input UDP address {:?}: {}", &address, error);
-                error!("{}", error_message);
-                return Err(Error::new(error.kind(), error_message));
-            }
+        Err(error) => {
+            let error_message = format!("File input error for '{:?}': {}", file_path, error);
+            error!("{}", error_message);
+            Err(Error::new(error.kind(), error_message))
         }
-    } else if args.input.http_input.is_some() {
-        let url = args.input.http_input.as_ref().unwrap();
-        let update_rate;
-        if args.http_input.http_input_rate.is_some() {
-            update_rate = args.http_input.http_input_rate.unwrap();
-        } else {
-            info!("Using default HTTP input rate of 5 seconds");
-            update_rate = 5000;
-        }
-        match HttpReader::new(url, update_rate) {
-            Ok(http_reader) => {
-                reader = Reader::Http(http_reader);
-                info!("Using HTTP input");
-            }
-            Err(error) => {
-                let error_message = format!("HTTP URL error {}: {}", &url, error);
-                error!("{}", error_message);
-                return Err(Error::new(error.kind(), error_message));
-            }
-        }
-    } else {
-        let error_message = "No input source provided!";
-        error!("{}", error_message);
-        return Err(Error::new(ErrorKind::InvalidInput, error_message));
     }
-    Ok(reader)
+}
+
+/// Prepare a reader for HTTP input
+fn handle_http_input(args: &ProgramArgs) -> Result<Reader, Error> {
+    let url = args.input.http_input.as_ref().unwrap();  // is_some checked in parent function
+    let update_rate;
+    if args.http_input.http_input_rate.is_some() {        
+        update_rate = args.http_input.http_input_rate.unwrap();
+        info!("Using HTTP input rate of {} milliseconds", update_rate);
+    } else {        
+        update_rate = HttpReader::DEFAULT_UPDATE_RATE;
+        info!("Using default HTTP input rate of {} milliseconds", update_rate);
+    }
+    let http_reader = HttpReader::new(url, update_rate)?;
+    info!("Using HTTP input");
+    Ok(Reader::Http(http_reader))
+}
+
+/// Prepare a reader for HTTPS input
+fn handle_https_input(args: &ProgramArgs) -> Result<Reader, Error> {
+    let url = args.input.https_input.as_ref().unwrap();  // is_some checked in parent function
+    let update_rate;
+    if args.https_input.https_input_rate.is_some() {        
+        update_rate = args.https_input.https_input_rate.unwrap();
+        info!("Using HTTPS input rate of {} milliseconds", update_rate);
+    } else {        
+        update_rate = HttpsReader::DEFAULT_UPDATE_RATE;
+        info!("Using default HTTPS input rate of {} milliseconds", update_rate);
+    }
+    // TODO:  Other HTTPS parameters here!
+    let https_reader = HttpsReader::new(url, update_rate)?;
+    info!("Using HTTPS input");
+    Ok(Reader::Https(https_reader))
+}
+
+/// Prepare a reader for STDIN input
+fn handle_stdin_input() -> Reader {
+    info!("Using STDIN input");
+    Reader::Stdin(StdinReader::new())
+}
+
+/// Prepare a reader for UDP input
+async fn handle_udp_input(args: &ProgramArgs) -> Result<Reader, Error> {
+    let address = args.input.udp_input.as_ref().unwrap();  // is_some checked in parent function
+    match UdpReader::new(address).await {
+        Ok(udp_reader) => {            
+            info!("Using UDP input");
+            Ok(Reader::Udp(udp_reader))
+        }
+        Err(error) => {
+            let error_message =
+                format!("Cannot open input UDP address {:?}: {}", &address, error);
+            error!("{}", error_message);
+            Err(Error::new(error.kind(), error_message))
+        }
+    }
+}
+
+
+/// Select the wanted input implementation from the command line args
+pub async fn get_input_reader(args: &ProgramArgs) -> Result<Reader, Error> {    
+    let mut maybe_reader: Option<Reader> = None;
+    if args.input.file_input.is_some() {
+        check_reader_set(&maybe_reader)?;
+        maybe_reader = Some(handle_file_input(&args).await?);        
+    } 
+    if args.input.http_input.is_some() {
+        check_reader_set(&maybe_reader)?;
+        maybe_reader = Some(handle_http_input(&args)?)        
+    }
+    if args.input.https_input.is_some() {
+        check_reader_set(&maybe_reader)?;
+        maybe_reader = Some(handle_https_input(&args)?)        
+    }
+    if args.input.stdin_input {
+        check_reader_set(&maybe_reader)?;
+        maybe_reader = Some(handle_stdin_input());        
+    } 
+    
+    if args.input.udp_input.is_some() {
+        check_reader_set(&maybe_reader)?;
+        maybe_reader = Some(handle_udp_input(&args).await?);        
+    }
+    
+    match maybe_reader {
+        Some(reader) => Ok(reader),
+        None => {
+            let error_message = "No input source provided!";
+            error!("{}", error_message);
+            return Err(Error::new(ErrorKind::InvalidInput, error_message));
+        }
+    }    
 }
 
 
@@ -291,7 +404,8 @@ pub async fn get_output_writers(args: &ProgramArgs) -> Result<Vec<Writer>, Error
         }
     } 
      if args.output.http_output.is_some() {
-            let url = args.output.http_output.as_ref().unwrap();
+        let urls = args.output.http_output.as_ref().unwrap();
+        for url in urls {            
             let output_rate: Duration;
             let delimiter: Vec<u8>;
             let include_delimiter: bool;
@@ -321,6 +435,7 @@ pub async fn get_output_writers(args: &ProgramArgs) -> Result<Vec<Writer>, Error
                     return Err(Error::new(error.kind(), error_message));
                 }
             }
+        }
     }
     if args.output.tls_output.is_some() {
         let addresses = args.output.tls_output.as_ref().unwrap();
@@ -358,9 +473,9 @@ fn get_tls_config(args: &ProgramArgs) -> Result<ClientConfig, std::io::Error> {
     // setup root cert store
     let mut root_cert_store = RootCertStore::empty();
     root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
-    if args.tls_output.tls_root_ca.is_some() {
+    if args.tls_output.tls_output_root_ca.is_some() {
         match get_root_ca(
-            args.tls_output.tls_root_ca.as_ref().unwrap(),
+            args.tls_output.tls_output_root_ca.as_ref().unwrap(),
             &mut root_cert_store,
         ) {
             Ok(()) => {} // no issues loading CA roots
@@ -375,9 +490,7 @@ fn get_tls_config(args: &ProgramArgs) -> Result<ClientConfig, std::io::Error> {
     // begin build the config
     // check if no verification was requested
     let config: ConfigBuilder<ClientConfig, WantsClientCert> =
-        if args.tls_output.tls_skip_server_verify.is_some()
-            && args.tls_output.tls_skip_server_verify.unwrap()
-        {
+        if args.tls_output.tls_output_skip_server_verify {
             let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
             dangerous_config
                 .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new()))
@@ -385,13 +498,13 @@ fn get_tls_config(args: &ProgramArgs) -> Result<ClientConfig, std::io::Error> {
             ClientConfig::builder().with_root_certificates(root_cert_store)
         };
     // see if client auth is needed
-    match args.tls_output.tls_cert_chain.as_ref() {
+    match args.tls_output.tls_output_cert_chain.as_ref() {
         Some(tls_cert_chain_path) => {
             // get certificate chain
             match get_tls_cert_chain(tls_cert_chain_path) {
                 Ok(cert_chain) => {
                     // get client certificate
-                    match args.tls_output.tls_client_key.as_ref() {
+                    match args.tls_output.tls_output_client_key.as_ref() {
                         Some(tls_client_key_path) => {
                             match get_tls_client_key(tls_client_key_path) {
                                 Ok(client_key) => {
@@ -437,7 +550,7 @@ fn get_tls_config(args: &ProgramArgs) -> Result<ClientConfig, std::io::Error> {
         }
         None => {
             // make sure the user did not give a client certificate too
-            if args.tls_output.tls_client_key.is_some() {
+            if args.tls_output.tls_output_client_key.is_some() {
                 // error: a cert chain is needed if the user is providing a client key
                 let error_message = "Client key (--tls-client-key) requires certificate chain (--tls-cert-chain) to also be used";
                 error!("{}", error_message);

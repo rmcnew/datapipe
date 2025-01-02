@@ -6,6 +6,7 @@ use log::{error, trace};
 use reqwest::{Certificate, tls::CertificateRevocationList, Identity, StatusCode};
 use std::io::{Error, ErrorKind};
 
+#[derive(Debug)]
 pub struct HttpsReader {
     client: reqwest::Client,
     url: url::Url,    
@@ -14,6 +15,8 @@ pub struct HttpsReader {
 
 
 impl HttpsReader {
+    pub const DEFAULT_UPDATE_RATE: u64 = 5000;  // milliseconds
+
     pub fn new(https_input_url: &str, update_rate: u64, maybe_root_cert: Option<Certificate>, maybe_crls: Option<Vec<CertificateRevocationList>>, maybe_identity: Option<Identity>, accept_invalid_hostnames: bool, accept_invalid_certs: bool) -> Result<Self, Error> {
         // HTTP client init and configuration
         let url = good_url(https_input_url, "https://")?;

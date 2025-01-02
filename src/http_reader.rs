@@ -6,6 +6,7 @@ use log::{error, trace};
 use reqwest::StatusCode;
 use std::io::{Error, ErrorKind};
 
+#[derive(Debug)]
 pub struct HttpReader {
     client: reqwest::Client,
     url: url::Url,    
@@ -14,6 +15,8 @@ pub struct HttpReader {
 
 
 impl HttpReader {
+    pub const DEFAULT_UPDATE_RATE: u64 = 5000;  // milliseconds
+
     pub fn new(http_input_url: &str, update_rate: u64) -> Result<Self, Error> {
         // HTTP client init and configuration
         let url = good_url(http_input_url, "http://")?;

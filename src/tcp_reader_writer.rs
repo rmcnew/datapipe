@@ -9,6 +9,7 @@ use tokio::net::TcpStream;
 
 const TCP_READ_BUFFER_SIZE: usize = 2048;
 
+#[derive(Debug)]
 pub struct TcpReaderWriter {
     tcp_stream: TcpStream,
 }
