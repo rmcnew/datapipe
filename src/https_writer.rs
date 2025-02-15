@@ -23,6 +23,7 @@ impl HttpsWriter {
         // HTTP client init and configuration
         let url = good_url(https_output_url, "https://")?;
         let mut client_builder = reqwest::Client::builder()
+                    .user_agent("datapipe")
                     .tls_built_in_root_certs(true)  // enable system root certs
                     .tls_built_in_webpki_certs(true);  // enable webpki root certs
                 if maybe_root_cert.is_some() {

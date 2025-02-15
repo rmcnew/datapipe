@@ -23,7 +23,7 @@ impl HttpWriter {
         // HTTP client init and configuration
         let url = good_url(http_output_url, "http://")?;
         Ok(Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder().user_agent("datapipe").build().unwrap(),
             url,
             delimiter: http_output_delimiter,
             include_delimiter: http_output_include_delimiter,

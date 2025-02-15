@@ -21,7 +21,7 @@ impl HttpReader {
         // HTTP client init and configuration
         let url = good_url(http_input_url, "http://")?;
         Ok(Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder().user_agent("datapipe").build().unwrap(),
             url,
             update_interval: tokio::time::interval(std::time::Duration::from_millis(update_rate)),
         })
