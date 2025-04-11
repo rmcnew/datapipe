@@ -10,12 +10,14 @@ use crate::tcp_reader_writer::TcpReaderWriter;
 use crate::udp_reader::UdpReader;
 use crate::file_writer::FileWriter;
 use crate::http_writer::HttpWriter;
+use crate::https_writer::HttpsWriter;
 use crate::stdout_writer::StdoutWriter;
 use crate::tls_reader_writer::TlsReaderWriter;
-use crate::udp_writer::{self, UdpWriter};
+use crate::udp_writer::UdpWriter;
 use crate::writer::Writer;
 use log::{error, info};
 use std::path::PathBuf;
+use reqwest::{Certificate, tls::CertificateRevocationList, Identity};
 use rustls_pemfile::{certs, private_key};
 use std::fs::File;
 use std::io::{BufReader, Error, ErrorKind};
@@ -38,28 +40,28 @@ use webpki_roots::TLS_SERVER_ROOTS;
 #[derive(Args, Debug, Clone)]
 #[group(required = true, multiple = false)]
 pub struct InputArgs {
-    /// --file-input  read input from file
+    /// read data from a file
     #[arg(long = "file-input")]
     pub file_input: Option<PathBuf>,
-    /// --http-input  read input from HTTP URL; requires --http-input-rate
+    /// read data from a HTTP URL; requires --http-input-rate
     #[arg(long = "http-input")]
     pub http_input: Option<String>,
-    /// --https-input  read input from HTTPS URL; requires --https-input-rate and optionally server and client certificates
+    /// read data from a HTTPS URL; requires --https-input-rate and optionally server and client certificates
     #[arg(long = "https-input")]
     pub https_input: Option<String>,    
-    /// --stdin-input  read input from STDIN
+    /// read data from STDIN
     #[arg(long = "stdin-input", default_value_t = false)]
     pub stdin_input: bool,
-    /// --tcp-input  read input from TCP address
+    /// read data from a TCP address
     #[arg(long = "tcp-input")]
     pub tcp_input: Option<String>,
-    /// --tcp-listen-input  open a local port to receive a TCP connection
+    /// open a local port to listen and receive data using a TCP connection
     #[arg(long = "tcp-listen-input")]
     pub tcp_listen_input: Option<String>,
-    /// --tls-input  read input from TLS address
+    /// read data from a TLS address; may need to configure server and client certificates
     #[arg(long = "tls-input")]
     pub tls_input: Option<String>,
-    /// --udp-input  read input from UDP address
+    /// read data from UDP address
     #[arg(long = "udp-input")]
     pub udp_input: Option<String>,   
 }
@@ -68,7 +70,7 @@ pub struct InputArgs {
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
 pub struct HttpInputArgs {
-    /// --http-input-rate  in milliseconds, how often should the input web address be polled?
+    /// read rate in milliseconds, how often should the input web address be polled?
     #[arg(long = "http-input-rate")]
     pub http_input_rate: Option<u64>,    
 }
@@ -77,40 +79,40 @@ pub struct HttpInputArgs {
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
 pub struct HttpsInputArgs {
-    /// --https-input-rate  in milliseconds, how often should the input web address be polled?
+    /// read rate in milliseconds, how often should the input web address be polled?
     #[arg(long = "https-input-rate")]
     pub https_input_rate: Option<u64>,    
-    /// --https-input-root-certificate  path to custom root certificate file to use in PEM format
-    #[arg(long = "https-input-root-certificate")]
-    pub https_input_root_certificate: Option<PathBuf>,
-    /// --https-input-certificate-revocation-list  path to custom certificate revocation list file to use in PEM format
+    /// path to custom root certificate file to use in PEM bundle format
+    #[arg(long = "https-input-root-certificates")]
+    pub https_input_root_certificates: Option<PathBuf>,
+    /// path to custom certificate revocation list file to use in PEM format
     #[arg(long = "https-input-certificate-revocation-list")]
     pub https_input_certificate_revocation_list: Option<PathBuf>,
-    /// --https-input-client-identity  path to client's custom private key and X509 certificate in PEM format.  Private key must be in RSA, SEC1 Elliptic Curve, or PKCS#8 format.
+    /// path to client's custom private key and X509 certificate in PEM format.  Private key must be in RSA, SEC1 Elliptic Curve, or PKCS#8 format.
     #[arg(long = "https-input-client-identity")]
     pub https_input_client_identity: Option<PathBuf>,
-    /// --https-input-accept-invalid-hostnames  DANGER! Do not validate hostnames in HTTPS setup.  Use with caution.  DANGER!
-    #[arg(long = "https-input-accept-invalid-hostnames")]
-    pub https_input_accept_invalid_hostnames: Option<bool>,
-    /// --https-input-accept-invalid-certificates  DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
+    /// DANGER! Do not validate hostnames in HTTPS setup.  Use with caution.  DANGER!
+    #[arg(long = "https-input-allow-invalid-hostnames")]
+    pub https_input_allow_invalid_hostnames: Option<bool>,
+    /// DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
     #[arg(long = "https-input-accept-invalid-certificates")]
-    pub https_input_accept_invalid_certificates: Option<bool>,
+    pub https_input_allow_invalid_certificates: Option<bool>,
 }
 
 /// Additional parameters needed for TLS input
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
 pub struct TlsInputArgs {
-    /// --tls-input-cert-chain  TLS certificate chain file to use
+    /// path to custom TLS certificate chain file to use
     #[arg(long = "tls-input-cert-chain")]
     pub tls_input_cert_chain: Option<PathBuf>,
-    /// --tls-input-client-key  TLS client certificate to use
+    /// path to custom TLS client certificate to use
     #[arg(long = "tls-input-client-key")]
     pub tls_input_client_key: Option<PathBuf>,
-    /// --tls-input-root-ca  use these CAs instead of web root CAs
+    /// path to custom Certificate Authority to use instead of web root CAs
     #[arg(long = "tls-input-root-ca")]
     pub tls_input_root_ca: Option<PathBuf>,
-    /// --tls-input-skip-server-verify  DANGER! Do not validate server identity.  Use with caution. DANGER!
+    /// DANGER! Do not validate server identity.  Use with caution. DANGER!
     #[arg(long = "tls-input-skip-server-verify", default_value_t = false)]
     pub tls_input_skip_server_verify: bool, 
 }
@@ -119,7 +121,7 @@ pub struct TlsInputArgs {
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
 pub struct DecryptionArgs {
-    /// --decrypt  decryption key to use
+    /// decryption key to use after reading data
     #[arg(long = "decrypt")]
     pub decryption_key: Option<String>,
 }
@@ -128,7 +130,7 @@ pub struct DecryptionArgs {
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
 pub struct EncryptionArgs {
-    /// --encrypt  encryption key to use
+    /// encryption key to use before writing data
     #[arg(long = "encrypt")]
     pub encryption_key: Option<String>,
 }
@@ -137,25 +139,25 @@ pub struct EncryptionArgs {
 #[derive(Args, Debug, Clone)]
 #[group(required = true, multiple = true)]
 pub struct OutputArgs {    
-    /// --file-output  write output to file
+    /// write data to a file
     #[arg(long = "file-output")]
     pub file_output: Option<PathBuf>,    
-    /// --http-output  write output to HTTP URL
+    /// write data to a HTTP URL; requires http-output-rate and optionally http-output-delimiter and http-output-include-delimiter
     #[arg(long = "http-output")]
     pub http_output: Option<String>,
-    /// --https-output  write output to HTTPS URL; requires http-output-rate and optionally delimiter
+    /// write data to a HTTPS URL; requires https-output-rate and optionally https-output-delimiter, https-output-include-delimiter, and custom server / client certificates
     #[arg(long = "https-output")]
     pub https_output: Option<String>,
-    /// --stdout-output  write output to STDOUT
+    /// write data to STDOUT
     #[arg(long = "stdout-output")]
     pub stdout_output: bool,
-    /// --tcp-output  write output to TCP address
+    /// write data to a TCP address
     #[arg(long = "tcp-output")]
     pub tcp_output: Option<String>,
-    /// --tls-output  write output to TCP/TLS URL
+    /// write data to a TLS URL; may need to configure server and client certificates
     #[arg(long = "tls-output")]
     pub tls_output: Option<String>,
-    /// --udp-output  write output to UDP address
+    /// write data to UDP address
     #[arg(long = "udp-output")]
     pub udp_output: Option<String>,
 }
@@ -164,13 +166,13 @@ pub struct OutputArgs {
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
 pub struct HttpOutputArgs {
-    /// --http-output-rate  in milliseconds, how often should data be sent to the output web address?
+    /// write rate in milliseconds, how often should data be sent to the output web address?
     #[arg(long = "http-output-rate")]
     pub http_output_rate: Option<u64>,    
-    /// --http-output-delimiter  this delimiter is used to group the output into one or more 'segments' that will be sent in each request
+    /// this delimiter is used to group the output into one or more 'segments' that will be sent in each request; defaults to newline
     #[arg(long = "http-output-delimiter")]
     pub http_output_delimiter: Option<Vec<u8>>,
-    /// --http-output-include-delimiter  should the delimiter be included with the segment that preceeds it?
+    /// should the delimiter be included with the segment that preceeds it?  defaults to true
     #[arg(long = "http-output-include-delimiter")]
     pub http_output_include_delimiter: Option<bool>,
 }
@@ -179,40 +181,46 @@ pub struct HttpOutputArgs {
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
 pub struct HttpsOutputArgs {
-    /// --https-output-rate  in milliseconds, how often should the output web address be polled?
+    /// write rate in milliseconds, how often should data be sent to the output web address?
     #[arg(long = "https-output-rate")]
-    pub https_output_rate: Option<u64>,    
-    /// --https-output-root-certificate  path to custom root certificate file to use in PEM format
-    #[arg(long = "https-output-root-certificate")]
-    pub https_output_root_certificate: Option<PathBuf>,
-    /// --https-output-certificate-revocation-list  path to custom certificate revocation list file to use in PEM format
+    pub https_output_rate: Option<u64>,
+    /// this delimiter is used to group the output into one or more 'segments' that will be sent in each request; defaults to newline
+    #[arg(long = "https-output-delimiter")]
+    pub https_output_delimiter: Option<Vec<u8>>,
+    /// should the delimiter be included with the segment that preceeds it?  defaults to true
+    #[arg(long = "https-output-include-delimiter")]
+    pub https_output_include_delimiter: Option<bool>,
+    /// path to custom root certificate file to use in PEM bundle format
+    #[arg(long = "https-output-root-certificates")]
+    pub https_output_root_certificates: Option<PathBuf>,
+    /// path to custom certificate revocation list file to use in PEM format
     #[arg(long = "https-output-certificate-revocation-list")]
     pub https_output_certificate_revocation_list: Option<PathBuf>,
-    /// --https-output-client-identity  path to client's custom private key and X509 certificate in PEM format.  Private key must be in RSA, SEC1 Elliptic Curve, or PKCS#8 format.
+    /// path to client's custom private key and X509 certificate in PEM format.  Private key must be in RSA, SEC1 Elliptic Curve, or PKCS#8 format.
     #[arg(long = "https-output-client-identity")]
     pub https_output_client_identity: Option<PathBuf>,
-    /// --https-output-accept-invalid-hostnames  DANGER! Do not validate hostnames in HTTPS setup.  Use with caution.  DANGER!
-    #[arg(long = "https-output-accept-invalid-hostnames")]
-    pub https_output_accept_invalid_hostnames: Option<bool>,
-    /// --https-output-accept-invalid-certificates  DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
-    #[arg(long = "https-output-accept-invalid-certificates")]
-    pub https_output_accept_invalid_certificates: Option<bool>,
+    /// DANGER! Do not validate hostnames in HTTPS setup.  Use with caution.  DANGER!
+    #[arg(long = "https-output-allow-invalid-hostnames")]
+    pub https_output_allow_invalid_hostnames: Option<bool>,
+    /// DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
+    #[arg(long = "https-output-allow-invalid-certificates")]
+    pub https_output_allow_invalid_certificates: Option<bool>,
 }
 
 /// Additional parameters needed for TLS output
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
 pub struct TlsOutputArgs {
-    /// --tls-output-cert-chain  TLS certificate chain file to use
+    /// path to custom TLS certificate chain file to use
     #[arg(long = "tls-output-cert-chain")]
     pub tls_output_cert_chain: Option<PathBuf>,
-    /// --tls-output-client-key  TLS client certificate to use
+    /// path to custom TLS client certificate to use
     #[arg(long = "tls-output-client-key")]
     pub tls_output_client_key: Option<PathBuf>,
-    /// --tls-output-root-ca  use these CAs instead of web root CAs
+    /// path to custom Certificate Authority certificates to use instead of web root CAs
     #[arg(long = "tls-output-root-ca")]
     pub tls_output_root_ca: Option<PathBuf>,
-    /// --tls-output-skip-server-verify  DANGER! Do not validate server identity.  Use with caution. DANGER!
+    /// DANGER! Do not validate server identity.  Use with caution. DANGER!
     #[arg(long = "tls-output-skip-server-verify")]
     pub tls_output_skip_server_verify: Option<bool>, 
 }
@@ -242,424 +250,683 @@ pub struct ProgramArgs {
     pub tls_output: TlsOutputArgs,
 }
 
-/// Ensure that the input reader is set only once
-fn check_reader_set(maybe_reader: &Option<Reader>) -> Result<(), Error> {
-    match maybe_reader.as_ref() {
-        Some(reader) => {
-            let error_message = format!("Input previously assigned as {:?}; only one input can be used.", reader);
-            error!("{}", error_message);
-            Err(Error::new(ErrorKind::AlreadyExists, error_message))
-        }        
-        None => Ok(())
-    }    
-}
+impl ProgramArgs {
 
-/// Prepare a reader for file input
-async fn handle_file_input(args: &ProgramArgs) -> Result<Reader, Error> {    
-    let file_path = args.input.file_input.as_ref().unwrap(); // is_some checked in parent function
-    match FileReader::new(file_path).await {
-        Ok(file_reader) => {
-            info!("Using FILE input");
-            Ok(Reader::File(file_reader))            
-        }
-        Err(error) => {
-            let error_message = format!("File input error for '{:?}': {}", file_path, error);
-            error!("{}", error_message);
-            Err(Error::new(error.kind(), error_message))
-        }
-    }
-}
-
-/// Prepare a reader for HTTP input
-fn handle_http_input(args: &ProgramArgs) -> Result<Reader, Error> {
-    let url = args.input.http_input.as_ref().unwrap();  // is_some checked in parent function
-    let update_rate;
-    if args.http_input.http_input_rate.is_some() {        
-        update_rate = args.http_input.http_input_rate.unwrap();
-        info!("Using HTTP input rate of {} milliseconds", update_rate);
-    } else {        
-        update_rate = HttpReader::DEFAULT_UPDATE_RATE;
-        info!("Using default HTTP input rate of {} milliseconds", update_rate);
-    }
-    let http_reader = HttpReader::new(url, update_rate)?;
-    info!("Using HTTP input");
-    Ok(Reader::Http(http_reader))
-}
-
-/// Prepare a reader for HTTPS input
-async fn handle_https_input(args: &ProgramArgs) -> Result<Reader, Error> {
-    let url = args.input.https_input.as_ref().unwrap();  // is_some checked in parent function    
-    let update_rate = args.https_input.https_input_rate.unwrap_or(HttpsReader::DEFAULT_UPDATE_RATE);
-    let maybe_root_cert;
-    let maybe_crls;
-    let maybe_identity;
-    
-    let accept_invalid_hostnames = *args.https_input.https_input_accept_invalid_hostnames.as_ref().unwrap_or(&false);       
-    let accept_invalid_certs = *args.https_input.https_input_accept_invalid_certificates.as_ref().unwrap_or(&false);
-
-    if args.https_input.https_input_root_certificate.is_some() {
-        let root_cert_path = args.https_input.https_input_root_certificate.clone().unwrap();
-        let root_cert_bytes = tokio::fs::read(&root_cert_path).await?;
-        match reqwest::Certificate::from_pem(&root_cert_bytes) {
-            Ok(root_cert) => {
-                maybe_root_cert = Some(root_cert);
-            }
-            Err(error) => {
-                let error_message = format!("Error getting root certificate at path {:?}: {}", root_cert_path, error);
+    /// Ensure that the input reader is set only once
+    fn check_reader_set(maybe_reader: &Option<Reader>) -> Result<(), Error> {
+        match maybe_reader.as_ref() {
+            Some(reader) => {
+                let error_message = format!("Input previously assigned as {:?}; only one input can be used.", reader);
                 error!("{}", error_message);
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
-            }
-        }        
-    } else {
-        maybe_root_cert = None;
+                Err(Error::new(ErrorKind::AlreadyExists, error_message))
+            }        
+            None => Ok(())
+        }    
     }
 
-    if args.https_input.https_input_certificate_revocation_list.is_some() {
-        let crl_path = args.https_input.https_input_certificate_revocation_list.clone().unwrap();
-        let crl_bytes = tokio::fs::read(&crl_path).await?;
-        match reqwest::tls::CertificateRevocationList::from_pem_bundle(&crl_bytes) {
-            Ok(crls) => {
-                maybe_crls = Some(crls);
-            }
-            Err(error) => {
-                let error_message = format!("Error getting certificate revocation list at path {:?}: {}", crl_path, error);
-                error!("{}", error_message);
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
-            }
-        }        
-    } else {
-        maybe_crls = None;
-    }
-
-    if args.https_input.https_input_client_identity.is_some() {
-        let identity_path = args.https_input.https_input_client_identity.clone().unwrap();
-        let identity_bytes = tokio::fs::read(&identity_path).await?;
-        match reqwest::tls::Identity::from_pem(&identity_bytes) {
-            Ok(identity) => {
-                maybe_identity = Some(identity);
+    /// Prepare a reader for file input
+    async fn handle_file_input(&self) -> Result<Reader, Error> {    
+        let file_path = self.input.file_input.as_ref().unwrap(); // is_some checked in parent function
+        match FileReader::new(file_path).await {
+            Ok(file_reader) => {
+                info!("Using FILE input");
+                Ok(Reader::File(file_reader))            
             }
             Err(error) => {
-                let error_message = format!("Error getting client identity at path {:?}: {}", identity_path, error);
-                error!("{}", error_message);
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
-            }
-        }        
-    } else {
-        maybe_identity = None;
-    }
-
-    let https_reader = HttpsReader::new(url, update_rate, maybe_root_cert, maybe_crls, maybe_identity,accept_invalid_hostnames, accept_invalid_certs)?;
-    info!("Using HTTPS input");
-    Ok(Reader::Https(https_reader))
-}
-
-/// Prepare a reader for STDIN input
-fn handle_stdin_input() -> Reader {
-    info!("Using STDIN input");
-    Reader::Stdin(StdinReader::new())
-}
-
-fn handle_tcp_input(args: &ProgramArgs) -> Result<Reader, Error> {
-
-}
-
-fn handle_tcp_listen_input(args: &ProgramArgs) -> Result<Reader, Error> {
-    
-}
-
-fn handle_tls_input(args: &ProgramArgs) -> Result<Reader, Error> {
-
-}
-
-
-/// Prepare a reader for UDP input
-async fn handle_udp_input(args: &ProgramArgs) -> Result<Reader, Error> {
-    let address = args.input.udp_input.as_ref().unwrap();  // is_some checked in parent function
-    match UdpReader::new(address).await {
-        Ok(udp_reader) => {            
-            info!("Using UDP input");
-            Ok(Reader::Udp(udp_reader))
-        }
-        Err(error) => {
-            let error_message =
-                format!("Cannot open input UDP address {:?}: {}", &address, error);
-            error!("{}", error_message);
-            Err(Error::new(error.kind(), error_message))
-        }
-    }
-}
-
-
-/// Select the wanted input implementation from the command line args
-pub async fn get_input_reader(args: &ProgramArgs) -> Result<Reader, Error> {    
-    let mut maybe_reader: Option<Reader> = None;
-    if args.input.file_input.is_some() {
-        check_reader_set(&maybe_reader)?;
-        maybe_reader = Some(handle_file_input(&args).await?);        
-    } 
-    if args.input.http_input.is_some() {
-        check_reader_set(&maybe_reader)?;
-        maybe_reader = Some(handle_http_input(&args)?)        
-    }
-    if args.input.https_input.is_some() {
-        check_reader_set(&maybe_reader)?;
-        maybe_reader = Some(handle_https_input(&args).await?)        
-    }
-    if args.input.stdin_input {
-        check_reader_set(&maybe_reader)?;
-        maybe_reader = Some(handle_stdin_input());        
-    } 
-    if args.input.tcp_input.is_some() {
-
-    }
-    if args.input.tcp_listen_input.is_some() {
-
-    }
-    if args.input.tls_input.is_some() {
-
-    }
-    if args.input.udp_input.is_some() {
-        check_reader_set(&maybe_reader)?;
-        maybe_reader = Some(handle_udp_input(&args).await?);        
-    }
-    
-    match maybe_reader {
-        Some(reader) => Ok(reader),
-        None => {
-            let error_message = "No input source provided!";
-            error!("{}", error_message);
-            return Err(Error::new(ErrorKind::InvalidInput, error_message));
-        }
-    }    
-}
-
-async fn handle_file_output(args: &ProgramArgs) -> Result<Writer, Error> {
-    let file_path = args.output.file_output.as_ref().unwrap();        
-    match FileWriter::new(&file_path).await {
-        Ok(file_writer) => {            
-            info!("Using FILE output for path: {:?}", file_path);
-            Ok(Writer::File(file_writer))
-        }
-        Err(error) => {
-            let error_message = format!("File output error {:?}: {}", file_path, error);
-            error!("{}", error_message);
-            Err(Error::new(error.kind(), error_message))
-        }
-    }
-}
-
-fn handle_http_output(args: &ProgramArgs) -> Result<Writer, Error> {
-    let url = args.output.http_output.as_ref().unwrap();        
-    let output_rate: Duration;
-    let delimiter: Vec<u8>;
-    let include_delimiter: bool;
-    if args.http_output.http_output_delimiter.is_some() {
-        delimiter = args.http_output.http_output_delimiter.as_ref().unwrap().to_vec();
-    } else {
-        delimiter = "\n".as_bytes().to_vec();
-    }
-    if args.http_output.http_output_include_delimiter.is_some() {
-        include_delimiter = args.http_output.http_output_include_delimiter.unwrap();
-    } else {
-        include_delimiter = false;
-    }
-    if args.http_output.http_output_rate.is_some() {
-        output_rate = Duration::from_millis(args.http_output.http_output_rate.unwrap());
-    } else {
-        output_rate = Duration::from_millis(5000);
-    }
-    match HttpWriter::new(&url, delimiter, include_delimiter, output_rate) {            
-        Ok(http_writer) => {
-            info!("Using HTTP output");
-            Ok(Writer::Http(http_writer))            
-        }
-        Err(error) => {
-            let error_message = format!("HTTP URL error {}: {}", &url, error);
-            error!("{}", error_message);
-            Err(Error::new(error.kind(), error_message))
-        }
-    }
-}
-
-fn handle_https_output(args: &ProgramArgs) -> Result<Writer, Error> {
-
-}
-
-fn handle_stdout_writer() -> Writer {
-    info!("Using STDOUT output");
-    Writer::Stdout(StdoutWriter::new())
-}
-
-fn handle_tcp_output(args: &ProgramArgs) -> Result<Writer, Error> {
-    
-}
-
-async fn handle_tls_output(args: &ProgramArgs) -> Result<Writer, Error> {
-    let address = args.output.tls_output.as_ref().unwrap();        
-    match get_tls_config(args) {
-        Ok(tls_config) => match TlsReaderWriter::new(address.to_owned(), tls_config).await {
-            Ok(tls_writer) => {
-                info!("Using TLS output");
-                Ok(Writer::Tls(tls_writer))                
-            }
-            Err(error) => {
-                let error_message = format!("TLS output error {}: {}", &address, error);
+                let error_message = format!("File input error for '{:?}': {}", file_path, error);
                 error!("{}", error_message);
                 Err(Error::new(error.kind(), error_message))
             }
-        },
-        Err(error) => {
-            let error_message = format!("TLS setup error: {}", error);
-            error!("{}", error_message);
-            Err(Error::new(error.kind(), error_message))
         }
     }
-}
 
-async fn handle_udp_output(args: &ProgramArgs) -> Result<Writer, Error> {
-    let address = args.output.udp_output.as_ref().unwrap();        
-    match UdpWriter::new(&address).await {
-        Ok(udp_writer) => {
-            info!("Using UDP output");
-            Ok(Writer::Udp(udp_writer))            
+    /// Prepare a reader for HTTP input
+    fn handle_http_input(&self) -> Result<Reader, Error> {
+        let url = self.input.http_input.as_ref().unwrap();  // is_some checked in parent function
+        let update_rate;
+        if self.http_input.http_input_rate.is_some() {        
+            update_rate = self.http_input.http_input_rate.unwrap();
+            info!("Using HTTP input rate of {} milliseconds", update_rate);
+        } else {        
+            update_rate = HttpReader::DEFAULT_UPDATE_RATE;
+            info!("Using default HTTP input rate of {} milliseconds", update_rate);
         }
-        Err(error) => {
-            let error_message = format!("UDP output error {}: {}", address, error);
-            error!("{}", error_message);
-            Err(Error::new(error.kind(), error_message))
+        let http_reader = HttpReader::new(url, update_rate)?;
+        info!("Using HTTP input");
+        Ok(Reader::Http(http_reader))
+    }
+
+    /// Prepare a reader for HTTPS input
+    async fn handle_https_input(&self) -> Result<Reader, Error> {
+        let url = self.input.https_input.as_ref().unwrap();  // is_some checked in parent function    
+        let read_rate;
+        let maybe_root_certs;
+        let maybe_crls;
+        let maybe_identity;
+        
+        let allow_invalid_hostnames = *self.https_input.https_input_allow_invalid_hostnames.as_ref().unwrap_or(&false);       
+        let allow_invalid_certs = *self.https_input.https_input_allow_invalid_certificates.as_ref().unwrap_or(&false);
+
+        if self.https_input.https_input_rate.is_some() {
+            let read_rate_millis = self.https_input.https_input_rate.unwrap();
+            read_rate = Duration::from_millis(read_rate_millis);
+        } else {
+            read_rate = HttpsReader::DEFAULT_READ_RATE;
         }
-    }        
-}
 
-pub async fn get_output_writers(args: &ProgramArgs) -> Result<Vec<Writer>, Error> {
-    let mut writers: Vec<Writer> = Vec::new();
-    if args.output.file_output.is_some() {
-        let file_writer = handle_file_output(args).await?;
-        writers.push(file_writer);
-    }
-    if args.output.http_output.is_some() {
-        let http_writer = handle_http_output(args)?;
-        writers.push(http_writer);
-    }
-    if args.output.https_output.is_some() {
+        if self.https_input.https_input_root_certificates.is_some() {
+            let root_cert_path = self.https_input.https_input_root_certificates.clone().unwrap();
+            let root_cert_bytes = tokio::fs::read(&root_cert_path).await?;
+            match reqwest::Certificate::from_pem_bundle(&root_cert_bytes) {
+                Ok(root_certs) => {
+                    maybe_root_certs = Some(root_certs);
+                }
+                Err(error) => {
+                    let error_message = format!("Error getting root certificate at path {:?}: {}", root_cert_path, error);
+                    error!("{}", error_message);
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                }
+            }        
+        } else {
+            maybe_root_certs = None;
+        }
 
-    }
-    if args.output.stdout_output {
-        let stdout_writer = handle_stdout_writer();
-        writers.push(stdout_writer);        
-    }
-    if args.output.tcp_output.is_some() {
+        if self.https_input.https_input_certificate_revocation_list.is_some() {
+            let crl_path = self.https_input.https_input_certificate_revocation_list.clone().unwrap();
+            let crl_bytes = tokio::fs::read(&crl_path).await?;
+            match reqwest::tls::CertificateRevocationList::from_pem_bundle(&crl_bytes) {
+                Ok(crls) => {
+                    maybe_crls = Some(crls);
+                }
+                Err(error) => {
+                    let error_message = format!("Error getting certificate revocation list at path {:?}: {}", crl_path, error);
+                    error!("{}", error_message);
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                }
+            }        
+        } else {
+            maybe_crls = None;
+        }
 
-    }    
-    if args.output.tls_output.is_some() {
-        let tls_writer = handle_tls_output(args).await?;
-        writers.push(tls_writer);
-    }
-    if args.output.udp_output.is_some() {
-        let udp_writer = handle_udp_output(args).await?;
-        writers.push(udp_writer);
-    }        
-    if writers.is_empty() {
-        let error = "No output destination provided!";
-        error!("{}", error);
-        Err(Error::new(io::ErrorKind::InvalidInput, error))
-    } else {
-        Ok(writers)
-    }
-}
+        if self.https_input.https_input_client_identity.is_some() {
+            let identity_path = self.https_input.https_input_client_identity.clone().unwrap();
+            let identity_bytes = tokio::fs::read(&identity_path).await?;
+            match reqwest::tls::Identity::from_pem(&identity_bytes) {
+                Ok(identity) => {
+                    maybe_identity = Some(identity);
+                }
+                Err(error) => {
+                    let error_message = format!("Error getting client identity at path {:?}: {}", identity_path, error);
+                    error!("{}", error_message);
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                }
+            }        
+        } else {
+            maybe_identity = None;
+        }
 
-fn get_tls_config(args: &ProgramArgs) -> Result<ClientConfig, std::io::Error> {
-    // setup root cert store
-    let mut root_cert_store = RootCertStore::empty();
-    root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
-    if args.tls_output.tls_output_root_ca.is_some() {
-        match get_root_ca(
-            args.tls_output.tls_output_root_ca.as_ref().unwrap(),
-            &mut root_cert_store,
-        ) {
-            Ok(()) => {} // no issues loading CA roots
+        let https_reader = HttpsReader::new(url, read_rate, maybe_root_certs, maybe_crls, maybe_identity, allow_invalid_hostnames, allow_invalid_certs)?;
+        info!("Using HTTPS input");
+        Ok(Reader::Https(https_reader))
+    }
+
+    /// Prepare a reader for STDIN input
+    fn handle_stdin_input(&self) -> Reader {
+        info!("Using STDIN input");
+        Reader::Stdin(StdinReader::new())
+    }
+
+    async fn handle_tcp_input(&self) -> Result<Reader, Error> {
+        let address = self.input.tcp_input.as_ref().unwrap();
+        match TcpReaderWriter::new(address).await {
+            Ok(tcp_reader) => {
+                Ok(Reader::Tcp(tcp_reader))
+            }
             Err(error) => {
-                let error_message =
-                    format!("Error loading certificate authority (CA) roots: {}", error);
+                let error_message = format!("TCP input error {}: {}", &address, error);
                 error!("{}", error_message);
-                return Err(Error::new(ErrorKind::Other, error_message));
+                Err(Error::new(error.kind(), error_message))
             }
         }
     }
-    // begin build the config
-    // check if no verification was requested
-    let config: ConfigBuilder<ClientConfig, WantsClientCert> =
-        if args.tls_output.tls_output_skip_server_verify.unwrap_or(false) {
-            let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
-            dangerous_config
-                .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new()))
-        } else {
-            ClientConfig::builder().with_root_certificates(root_cert_store)
-        };
-    // see if client auth is needed
-    match args.tls_output.tls_output_cert_chain.as_ref() {
-        Some(tls_cert_chain_path) => {
-            // get certificate chain
-            match get_tls_cert_chain(tls_cert_chain_path) {
-                Ok(cert_chain) => {
-                    // get client certificate
-                    match args.tls_output.tls_output_client_key.as_ref() {
-                        Some(tls_client_key_path) => {
-                            match get_tls_client_key(tls_client_key_path) {
-                                Ok(client_key) => {
-                                    // finish building the config with cert chain and client key
-                                    match config.with_client_auth_cert(cert_chain, client_key) {
-                                        Ok(tls_config) => {
-                                            return Ok(tls_config);
-                                        }
-                                        Err(error) => {
-                                            let error_message = format!("Error creating TLS config with cert chain and client key: {}", error);
-                                            error!("{}", error_message);
-                                            return Err(Error::new(ErrorKind::Other, error_message));
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    // failed to get client key
-                                    let error_message = format!(
-                                        "Error getting client key {:?}: {}",
-                                        tls_client_key_path, error
-                                    );
-                                    error!("{}", error_message);
-                                    return Err(Error::new(ErrorKind::Other, error_message));
-                                }
-                            }
-                        }
-                        None => {
-                            // the user should have provided a client key too
-                            let error_message = "Certificate chain (--tls-cert-chain) requires client key (--tls-client-key) to also be used";
-                            error!("{}", error_message);
-                            return Err(Error::new(ErrorKind::Other, error_message));
-                        }
-                    }
+
+    async fn handle_tcp_listen_input(&self) -> Result<Reader, Error> {
+        let address = self.input.tcp_listen_input.as_ref().unwrap();
+        match TcpListenReader::new(address).await {
+            Ok(tcp_listen_reader) => {
+                Ok(Reader::TcpListen(tcp_listen_reader))
+            }
+            Err(error) => {
+                let error_message = format!("TCP listen input error {}: {}", &address, error);
+                error!("{}", error_message);
+                Err(Error::new(error.kind(), error_message))
+            }
+        }
+    }
+
+    async fn handle_tls_input(&self) -> Result<Reader, Error> {
+        let address = self.input.tls_input.as_ref().unwrap();        
+        match self.get_tls_input_config() {
+            Ok(tls_config) => match TlsReaderWriter::new(address.to_owned(), tls_config).await {
+                Ok(tls_reader) => {
+                    info!("Using TLS input");
+                    Ok(Reader::Tls(tls_reader))                
                 }
                 Err(error) => {
-                    // failed to get cert chain
-                    let error_message = format!(
-                        "Error getting certificate chain {:?}: {}",
-                        tls_cert_chain_path, error
-                    );
+                    let error_message = format!("TLS input error {}: {}", &address, error);
+                    error!("{}", error_message);
+                    Err(Error::new(error.kind(), error_message))
+                }
+            },
+            Err(error) => {
+                let error_message = format!("TLS setup error: {}", error);
+                error!("{}", error_message);
+                Err(Error::new(error.kind(), error_message))
+            }
+        }
+    }
+
+    fn get_tls_input_config(&self) -> Result<ClientConfig, std::io::Error> {
+        // setup root cert store
+        let mut root_cert_store = RootCertStore::empty();
+        root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
+        if self.tls_input.tls_input_root_ca.is_some() {
+            match get_root_ca(
+                self.tls_input.tls_input_root_ca.as_ref().unwrap(),
+                &mut root_cert_store,
+            ) {
+                Ok(()) => {} // no issues loading CA roots
+                Err(error) => {
+                    let error_message =
+                        format!("Error loading certificate authority (CA) roots: {}", error);
                     error!("{}", error_message);
                     return Err(Error::new(ErrorKind::Other, error_message));
                 }
             }
         }
-        None => {
-            // make sure the user did not give a client certificate too
-            if args.tls_output.tls_output_client_key.is_some() {
-                // error: a cert chain is needed if the user is providing a client key
-                let error_message = "Client key (--tls-client-key) requires certificate chain (--tls-cert-chain) to also be used";
-                error!("{}", error_message);
-                return Err(Error::new(ErrorKind::Other, error_message));
+        // begin build the config
+        // check if no verification was requested
+        let config: ConfigBuilder<ClientConfig, WantsClientCert> =
+            if self.tls_input.tls_input_skip_server_verify {
+                let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
+                dangerous_config
+                    .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new()))
+            } else {
+                ClientConfig::builder().with_root_certificates(root_cert_store)
+            };
+        // see if client auth is needed
+        match self.tls_input.tls_input_cert_chain.as_ref() {
+            Some(tls_cert_chain_path) => {
+                // get certificate chain
+                match get_tls_cert_chain(tls_cert_chain_path) {
+                    Ok(cert_chain) => {
+                        // get client certificate
+                        match self.tls_input.tls_input_client_key.as_ref() {
+                            Some(tls_client_key_path) => {
+                                match get_tls_client_key(tls_client_key_path) {
+                                    Ok(client_key) => {
+                                        // finish building the config with cert chain and client key
+                                        match config.with_client_auth_cert(cert_chain, client_key) {
+                                            Ok(tls_config) => {
+                                                return Ok(tls_config);
+                                            }
+                                            Err(error) => {
+                                                let error_message = format!("Error creating TLS config with cert chain and client key: {}", error);
+                                                error!("{}", error_message);
+                                                return Err(Error::new(ErrorKind::Other, error_message));
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        // failed to get client key
+                                        let error_message = format!(
+                                            "Error getting client key {:?}: {}",
+                                            tls_client_key_path, error
+                                        );
+                                        error!("{}", error_message);
+                                        return Err(Error::new(ErrorKind::Other, error_message));
+                                    }
+                                }
+                            }
+                            None => {
+                                // the user should have provided a client key too
+                                let error_message = "Certificate chain (--tls-cert-chain) requires client key (--tls-client-key) to also be used";
+                                error!("{}", error_message);
+                                return Err(Error::new(ErrorKind::Other, error_message));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        // failed to get cert chain
+                        let error_message = format!(
+                            "Error getting certificate chain {:?}: {}",
+                            tls_cert_chain_path, error
+                        );
+                        error!("{}", error_message);
+                        return Err(Error::new(ErrorKind::Other, error_message));
+                    }
+                }
             }
-            // finishing build the config with no client authentication
-            return Ok(config.with_no_client_auth());
+            None => {
+                // make sure the user did not give a client certificate too
+                if self.tls_input.tls_input_client_key.is_some() {
+                    // error: a cert chain is needed if the user is providing a client key
+                    let error_message = "Client key (--tls-client-key) requires certificate chain (--tls-cert-chain) to also be used";
+                    error!("{}", error_message);
+                    return Err(Error::new(ErrorKind::Other, error_message));
+                }
+                // finishing build the config with no client authentication
+                return Ok(config.with_no_client_auth());
+            }
         }
+    }
+
+    /// Prepare a reader for UDP input
+    async fn handle_udp_input(&self) -> Result<Reader, Error> {
+        let address = self.input.udp_input.as_ref().unwrap();  // is_some checked in parent function
+        match UdpReader::new(address).await {
+            Ok(udp_reader) => {            
+                info!("Using UDP input");
+                Ok(Reader::Udp(udp_reader))
+            }
+            Err(error) => {
+                let error_message =
+                    format!("Cannot open input UDP address {:?}: {}", &address, error);
+                error!("{}", error_message);
+                Err(Error::new(error.kind(), error_message))
+            }
+        }
+    }
+
+
+    /// Select the wanted input implementation from the command line args
+    pub async fn get_input_reader(&self) -> Result<Reader, Error> {    
+        let mut maybe_reader: Option<Reader> = None;
+        if self.input.file_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_file_input().await?);        
+        } 
+        if self.input.http_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_http_input()?);
+        }
+        if self.input.https_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_https_input().await?);      
+        }
+        if self.input.stdin_input {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_stdin_input());        
+        } 
+        if self.input.tcp_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_tcp_input().await?);
+        }
+        if self.input.tcp_listen_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_tcp_listen_input().await?);
+        }
+        if self.input.tls_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_tls_input().await?);
+        }
+        if self.input.udp_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_udp_input().await?);        
+        }    
+        match maybe_reader {
+            Some(reader) => Ok(reader),
+            None => {
+                let error_message = "No input source provided!";
+                error!("{}", error_message);
+                return Err(Error::new(ErrorKind::InvalidInput, error_message));
+            }
+        }    
+    }
+
+    async fn handle_file_output(&self) -> Result<Writer, Error> {
+        let file_path = self.output.file_output.as_ref().unwrap();        
+        match FileWriter::new(&file_path).await {
+            Ok(file_writer) => {            
+                info!("Using FILE output for path: {:?}", file_path);
+                Ok(Writer::File(file_writer))
+            }
+            Err(error) => {
+                let error_message = format!("File output error {:?}: {}", file_path, error);
+                error!("{}", error_message);
+                Err(Error::new(error.kind(), error_message))
+            }
+        }
+    }
+
+    fn handle_http_output(&self) -> Result<Writer, Error> {
+        let url = self.output.http_output.as_ref().unwrap();        
+        let output_rate: Duration;
+        let delimiter: Vec<u8>;
+        let include_delimiter: bool;
+        if self.http_output.http_output_delimiter.is_some() {
+            delimiter = self.http_output.http_output_delimiter.as_ref().unwrap().to_vec();
+        } else {
+            delimiter = HttpWriter::DEFAULT_DELIMITER.to_vec();
+        }
+        if self.http_output.http_output_include_delimiter.is_some() {
+            include_delimiter = self.http_output.http_output_include_delimiter.unwrap();
+        } else {
+            include_delimiter = true;
+        }
+        if self.http_output.http_output_rate.is_some() {
+            output_rate = Duration::from_millis(self.http_output.http_output_rate.unwrap());
+        } else {
+            output_rate = HttpWriter::DEFAULT_WRITE_RATE;
+        }
+        match HttpWriter::new(&url, delimiter, include_delimiter, output_rate) {            
+            Ok(http_writer) => {
+                info!("Using HTTP output");
+                Ok(Writer::Http(http_writer))            
+            }
+            Err(error) => {
+                let error_message = format!("HTTP URL error {}: {}", &url, error);
+                error!("{}", error_message);
+                Err(Error::new(error.kind(), error_message))
+            }
+        }
+    }
+
+    async fn handle_https_output(&self) -> Result<Writer, Error> {
+        let url = self.output.http_output.as_ref().unwrap();        
+        let write_rate;
+        let delimiter: Vec<u8>;
+        let include_delimiter: bool;
+        let maybe_root_certs: Option<Vec<Certificate>>;
+        let maybe_crls: Option<Vec<CertificateRevocationList>>;
+        let maybe_identity: Option<Identity>;
+
+        let allow_invalid_hostnames = *self.https_output.https_output_allow_invalid_hostnames.as_ref().unwrap_or(&false);       
+        let allow_invalid_certs = *self.https_output.https_output_allow_invalid_certificates.as_ref().unwrap_or(&false);
+
+        if self.https_output.https_output_rate.is_some() {
+            let write_rate_millis = self.https_output.https_output_rate.unwrap();
+            write_rate = Duration::from_millis(write_rate_millis);
+        } else {
+            write_rate = HttpsWriter::DEFAULT_WRITE_RATE;
+        }
+
+        if self.https_output.https_output_delimiter.is_some() {
+            delimiter = self.https_output.https_output_delimiter.as_ref().unwrap().to_vec();
+        } else {
+            delimiter = HttpsWriter::DEFAULT_DELIMITER.to_vec();
+        }
+        if self.https_output.https_output_include_delimiter.is_some() {
+            include_delimiter = self.https_output.https_output_include_delimiter.unwrap();
+        } else {
+            include_delimiter = true;
+        }
+        
+        if self.https_output.https_output_root_certificates.is_some() {
+            let root_cert_path = self.https_output.https_output_root_certificates.clone().unwrap();
+            let root_cert_bytes = tokio::fs::read(&root_cert_path).await?;
+            match reqwest::Certificate::from_pem_bundle(&root_cert_bytes) {
+                Ok(root_certs) => {
+                    maybe_root_certs = Some(root_certs);
+                }
+                Err(error) => {
+                    let error_message = format!("Error getting root certificate at path {:?}: {}", root_cert_path, error);
+                    error!("{}", error_message);
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                }
+            }        
+        } else {
+            maybe_root_certs = None;
+        }
+
+        if self.https_output.https_output_certificate_revocation_list.is_some() {
+            let crl_path = self.https_output.https_output_certificate_revocation_list.clone().unwrap();
+            let crl_bytes = tokio::fs::read(&crl_path).await?;
+            match reqwest::tls::CertificateRevocationList::from_pem_bundle(&crl_bytes) {
+                Ok(crls) => {
+                    maybe_crls = Some(crls);
+                }
+                Err(error) => {
+                    let error_message = format!("Error getting certificate revocation list at path {:?}: {}", crl_path, error);
+                    error!("{}", error_message);
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                }
+            }        
+        } else {
+            maybe_crls = None;
+        }
+
+        if self.https_output.https_output_client_identity.is_some() {
+            let identity_path = self.https_output.https_output_client_identity.clone().unwrap();
+            let identity_bytes = tokio::fs::read(&identity_path).await?;
+            match reqwest::tls::Identity::from_pem(&identity_bytes) {
+                Ok(identity) => {
+                    maybe_identity = Some(identity);
+                }
+                Err(error) => {
+                    let error_message = format!("Error getting client identity at path {:?}: {}", identity_path, error);
+                    error!("{}", error_message);
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                }
+            }        
+        } else {
+            maybe_identity = None;
+        }
+
+        match HttpsWriter::new(&url, delimiter, include_delimiter, write_rate, maybe_root_certs, maybe_crls, maybe_identity, allow_invalid_hostnames, allow_invalid_certs) {            
+            Ok(https_writer) => {
+                info!("Using HTTPS output");
+                Ok(Writer::Https(https_writer))            
+            }
+            Err(error) => {
+                let error_message = format!("HTTPS URL error {}: {}", &url, error);
+                error!("{}", error_message);
+                Err(Error::new(error.kind(), error_message))
+            }
+        }
+    }
+
+    fn handle_stdout_writer(&self) -> Writer {
+        info!("Using STDOUT output");
+        Writer::Stdout(StdoutWriter::new())
+    }
+
+    async fn handle_tcp_output(&self) -> Result<Writer, Error> {
+        let address = self.output.tcp_output.as_ref().unwrap();
+        match TcpReaderWriter::new(address).await {
+            Ok(tcp_writer) => {
+                Ok(Writer::Tcp(tcp_writer))
+            }
+            Err(error) => {
+                let error_message = format!("TCP output error {}: {}", &address, error);
+                error!("{}", error_message);
+                Err(Error::new(error.kind(), error_message))
+            }
+        }
+    }
+
+    async fn handle_tls_output(&self) -> Result<Writer, Error> {
+        let address = self.output.tls_output.as_ref().unwrap();        
+        match self.get_tls_output_config() {
+            Ok(tls_config) => match TlsReaderWriter::new(address.to_owned(), tls_config).await {
+                Ok(tls_writer) => {
+                    info!("Using TLS output");
+                    Ok(Writer::Tls(tls_writer))                
+                }
+                Err(error) => {
+                    let error_message = format!("TLS output error {}: {}", &address, error);
+                    error!("{}", error_message);
+                    Err(Error::new(error.kind(), error_message))
+                }
+            },
+            Err(error) => {
+                let error_message = format!("TLS setup error: {}", error);
+                error!("{}", error_message);
+                Err(Error::new(error.kind(), error_message))
+            }
+        }
+    }
+
+    fn get_tls_output_config(&self) -> Result<ClientConfig, std::io::Error> {
+        // setup root cert store
+        let mut root_cert_store = RootCertStore::empty();
+        root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
+        if self.tls_output.tls_output_root_ca.is_some() {
+            match get_root_ca(
+                self.tls_output.tls_output_root_ca.as_ref().unwrap(),
+                &mut root_cert_store,
+            ) {
+                Ok(()) => {} // no issues loading CA roots
+                Err(error) => {
+                    let error_message =
+                        format!("Error loading certificate authority (CA) roots: {}", error);
+                    error!("{}", error_message);
+                    return Err(Error::new(ErrorKind::Other, error_message));
+                }
+            }
+        }
+        // begin build the config
+        // check if no verification was requested
+        let config: ConfigBuilder<ClientConfig, WantsClientCert> =
+            if self.tls_output.tls_output_skip_server_verify.unwrap_or(false) {
+                let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
+                dangerous_config
+                    .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new()))
+            } else {
+                ClientConfig::builder().with_root_certificates(root_cert_store)
+            };
+        // see if client auth is needed
+        match self.tls_output.tls_output_cert_chain.as_ref() {
+            Some(tls_cert_chain_path) => {
+                // get certificate chain
+                match get_tls_cert_chain(tls_cert_chain_path) {
+                    Ok(cert_chain) => {
+                        // get client certificate
+                        match self.tls_output.tls_output_client_key.as_ref() {
+                            Some(tls_client_key_path) => {
+                                match get_tls_client_key(tls_client_key_path) {
+                                    Ok(client_key) => {
+                                        // finish building the config with cert chain and client key
+                                        match config.with_client_auth_cert(cert_chain, client_key) {
+                                            Ok(tls_config) => {
+                                                return Ok(tls_config);
+                                            }
+                                            Err(error) => {
+                                                let error_message = format!("Error creating TLS config with cert chain and client key: {}", error);
+                                                error!("{}", error_message);
+                                                return Err(Error::new(ErrorKind::Other, error_message));
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        // failed to get client key
+                                        let error_message = format!(
+                                            "Error getting client key {:?}: {}",
+                                            tls_client_key_path, error
+                                        );
+                                        error!("{}", error_message);
+                                        return Err(Error::new(ErrorKind::Other, error_message));
+                                    }
+                                }
+                            }
+                            None => {
+                                // the user should have provided a client key too
+                                let error_message = "Certificate chain (--tls-cert-chain) requires client key (--tls-client-key) to also be used";
+                                error!("{}", error_message);
+                                return Err(Error::new(ErrorKind::Other, error_message));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        // failed to get cert chain
+                        let error_message = format!(
+                            "Error getting certificate chain {:?}: {}",
+                            tls_cert_chain_path, error
+                        );
+                        error!("{}", error_message);
+                        return Err(Error::new(ErrorKind::Other, error_message));
+                    }
+                }
+            }
+            None => {
+                // make sure the user did not give a client certificate too
+                if self.tls_output.tls_output_client_key.is_some() {
+                    // error: a cert chain is needed if the user is providing a client key
+                    let error_message = "Client key (--tls-client-key) requires certificate chain (--tls-cert-chain) to also be used";
+                    error!("{}", error_message);
+                    return Err(Error::new(ErrorKind::Other, error_message));
+                }
+                // finishing build the config with no client authentication
+                return Ok(config.with_no_client_auth());
+            }
+        }
+    }
+
+    async fn handle_udp_output(&self) -> Result<Writer, Error> {
+        let address = self.output.udp_output.as_ref().unwrap();        
+        match UdpWriter::new(&address).await {
+            Ok(udp_writer) => {
+                info!("Using UDP output");
+                Ok(Writer::Udp(udp_writer))            
+            }
+            Err(error) => {
+                let error_message = format!("UDP output error {}: {}", address, error);
+                error!("{}", error_message);
+                Err(Error::new(error.kind(), error_message))
+            }
+        }        
+    }
+
+    pub async fn get_output_writers(&self) -> Result<Vec<Writer>, Error> {
+        let mut writers: Vec<Writer> = Vec::new();
+        if self.output.file_output.is_some() {
+            let file_writer = self.handle_file_output().await?;
+            writers.push(file_writer);
+        }
+        if self.output.http_output.is_some() {
+            let http_writer = self.handle_http_output()?;
+            writers.push(http_writer);
+        }
+        if self.output.https_output.is_some() {
+            let https_writer = self.handle_https_output().await?;
+            writers.push(https_writer);
+        }
+        if self.output.stdout_output {
+            let stdout_writer = self.handle_stdout_writer();
+            writers.push(stdout_writer);        
+        }
+        if self.output.tcp_output.is_some() {
+            let tcp_writer = self.handle_tcp_output().await?;
+            writers.push(tcp_writer);
+        }    
+        if self.output.tls_output.is_some() {
+            let tls_writer = self.handle_tls_output().await?;
+            writers.push(tls_writer);
+        }
+        if self.output.udp_output.is_some() {
+            let udp_writer = self.handle_udp_output().await?;
+            writers.push(udp_writer);
+        }        
+        if writers.is_empty() {
+            let error = "No output destination provided!";
+            error!("{}", error);
+            Err(Error::new(io::ErrorKind::InvalidInput, error))
+        } else {
+            Ok(writers)
+        }
+    }
+
+    
+    pub async fn to_parameters(&self) -> Result<Parameters, std::io::Error> {
+        let reader = self.get_input_reader().await?;
+        let writers = self.get_output_writers().await?;
+        
+        Ok(Parameters{
+            reader,
+            maybe_decryption_key: None,
+            maybe_encryption_key: None,
+            writers
+        })
     }
 }
 
@@ -846,59 +1113,4 @@ impl ServerCertVerifier for NoCertificateVerification {
 }
 
 
-impl ProgramArgs {
-
-    pub async fn to_parameters(&self) -> Result<Parameters, std::io::Error> {
-        /*
-        // parse input UDP address if present
-        if args.input.udp_input.is_some()
-            && !good_tcp_udp_address(args.input.udp_input.clone().unwrap().as_str())
-        {
-            eprintln!(
-                "Invalid UDP input address: {}",
-                args.input.udp_input.unwrap()
-            );
-            return ExitCode::FAILURE;
-        }
-        // parse HTTP input URL if present
-        if args.input.http_input.is_some() && !good_url(args.input.http_input.clone().unwrap().as_str())
-        {
-            eprintln!("Invalid HTTP input URL: {}", args.input.http_input.unwrap());
-            return ExitCode::FAILURE;
-        }
-        // parse output UDP address if present
-        if args.output.udp_output.is_some() {
-            let addresses = args.output.udp_output.clone().unwrap();
-            for address in addresses {
-                if !good_tcp_udp_address(&address) {
-                    eprintln!("Invalid UDP output address: {}", address);
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-        // parse HTTP output URL if present
-        if args.output.http_output.is_some()
-            && !good_url(args.output.http_output.clone().unwrap().as_str())
-        {
-            eprintln!(
-                "Invalid HTTP output URL: {}",
-                args.output.http_output.unwrap()
-            );
-            return ExitCode::FAILURE;
-        }
-        // parse TLS (TCP) address if present
-        if args.output.tls_output.is_some() {
-            let addresses = args.output.tls_output.clone().unwrap();
-            for address in addresses {
-                if !good_tcp_udp_address(&address) {
-                    eprintln!("Invalid TLS output address: {}", address);
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-        */
-
-        Ok(Parameters::default())
-    }
-}
 

@@ -19,6 +19,9 @@ pub struct HttpWriter {
 }
 
 impl HttpWriter {    
+    pub const DEFAULT_DELIMITER: [u8; 1] = [b'\n'];
+    pub const DEFAULT_WRITE_RATE: Duration = Duration::from_secs(5);
+
     pub fn new(http_output_url: &str, http_output_delimiter: Vec<u8>, http_output_include_delimiter: bool, http_output_rate: Duration) -> Result<Self, Error> {
         // HTTP client init and configuration
         let url = good_url(http_output_url, "http://")?;

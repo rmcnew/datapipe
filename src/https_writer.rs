@@ -4,30 +4,35 @@ use crate::datapipe_types::{good_url, OutputWriter};
 use log::{error, trace};
 use reqwest::{Certificate, tls::CertificateRevocationList, Identity};
 use std::io::{Error, ErrorKind};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub struct HttpsWriter {
     client: reqwest::Client,
     url: url::Url,
     delimiter: Vec<u8>,
     include_delimiter: bool,
-    output_rate: std::time::Duration,
-    last_output: Instant,
+    write_interval: tokio::time::Interval,    
     payload: Vec<u8>,  // the data to be sent
     buffer: Vec<u8>,   // data received for which we have not yet seen the delimiter
     buffer_index: usize,  // the current position in the buffer that we have scanned to    
 }
 
-impl HttpsWriter {    
-    pub fn new(https_output_url: &str, http_output_delimiter: Vec<u8>, http_output_include_delimiter: bool, http_output_rate: Duration, maybe_root_cert: Option<Certificate>, maybe_crls: Option<Vec<CertificateRevocationList>>, maybe_identity: Option<Identity>, allow_invalid_hostnames: bool, allow_invalid_certs: bool) -> Result<Self, Error> {
+impl HttpsWriter {
+    pub const DEFAULT_DELIMITER: [u8; 1] = [b'\n'];
+    pub const DEFAULT_WRITE_RATE: Duration = Duration::from_secs(5);
+
+    pub fn new(https_output_url: &str, https_output_delimiter: Vec<u8>, https_output_include_delimiter: bool, write_rate: Duration, maybe_root_certs: Option<Vec<Certificate>>, maybe_crls: Option<Vec<CertificateRevocationList>>, maybe_identity: Option<Identity>, allow_invalid_hostnames: bool, allow_invalid_certs: bool) -> Result<Self, Error> {
         // HTTP client init and configuration
         let url = good_url(https_output_url, "https://")?;
         let mut client_builder = reqwest::Client::builder()
                     .user_agent("datapipe")
                     .tls_built_in_root_certs(true)  // enable system root certs
                     .tls_built_in_webpki_certs(true);  // enable webpki root certs
-                if maybe_root_cert.is_some() {
-                    client_builder = client_builder.add_root_certificate(maybe_root_cert.unwrap());
+                if maybe_root_certs.is_some() {
+                    let certs = maybe_root_certs.unwrap();
+                    for cert in certs {
+                        client_builder = client_builder.add_root_certificate(cert);
+                    }                    
                 }
                 if maybe_crls.is_some() {
                     client_builder = client_builder.add_crls(maybe_crls.unwrap());
@@ -46,10 +51,9 @@ impl HttpsWriter {
                         Ok(Self {
                             client,
                             url,
-                            delimiter: http_output_delimiter,
-                            include_delimiter: http_output_include_delimiter,
-                            output_rate: http_output_rate.clone(),
-                            last_output: Instant::now() - http_output_rate, // backdate so we can write immediately after initialization
+                            delimiter: https_output_delimiter,
+                            include_delimiter: https_output_include_delimiter,
+                            write_interval: tokio::time::interval(write_rate),
                             payload: Vec::new(),
                             buffer: Vec::new(),
                             buffer_index: 0,                    
@@ -99,8 +103,6 @@ impl HttpsWriter {
         match self.client.put(self.url.as_str()).body(payload).send().await {
             Ok(response) => {
                 trace!("HttpsOutput:  Web server response is: {:?}", response);
-                // update last_output to now()
-                self.last_output = Instant::now();
                 Ok(())
             }
             Err(error) => {
@@ -125,8 +127,9 @@ impl OutputWriter for HttpsWriter {
         if found_delimiter {            
             self.extract_payload();
         }
+        self.write_interval.tick().await;  // wait until it is time to read
         // if last_output was older than output_rate and there is data to send
-        if self.last_output.elapsed() >= self.output_rate && self.payload.len() > 0 {
+        if self.payload.len() > 0 {
             self.send_payload().await?;
         }
         Ok(())

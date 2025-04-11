@@ -2,7 +2,6 @@
 
 use bytes::Bytes;
 use log::error;
-use std::time::Duration;
 use std::io::{Error, ErrorKind};
 use url::Url;
 
@@ -42,8 +41,4 @@ pub fn good_url(maybe_url: &str, prefix: &str) -> Result<url::Url, Error> {
         }
     }    
 }
-
-
-/// How often should the HTTP(S) input receive or HTTP(S) output send?
-pub struct Rate(Duration);
 
