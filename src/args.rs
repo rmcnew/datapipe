@@ -117,6 +117,7 @@ pub struct TlsInputArgs {
     pub tls_input_skip_server_verify: bool, 
 }
 
+/*
 /// Additional parameters for decrypting input
 #[derive(Args, Debug, Clone)]
 #[group(required = false, multiple = true)]
@@ -134,6 +135,7 @@ pub struct EncryptionArgs {
     #[arg(long = "encrypt")]
     pub encryption_key: Option<String>,
 }
+*/
 
 /// Choose one or more output destinations
 #[derive(Args, Debug, Clone)]
@@ -225,6 +227,19 @@ pub struct TlsOutputArgs {
     pub tls_output_skip_server_verify: Option<bool>, 
 }
 
+/// Logging parameters
+#[derive(Args, Debug, Clone)]
+#[group(required = false, multiple = true)]
+pub struct LoggingArgs {
+    /// should logs be kept after the program exits?  defaults to false
+    #[arg(long = "keep-logs", default_value_t = false)]
+    pub keep_logs: bool,
+    /// where should logs be written?  defaults to /var/tmp
+    #[arg(long = "log-dir")]
+    pub log_dir: Option<String>,    
+}
+
+
 /// Overall command line args
 #[derive(Parser, Debug, Clone)]
 pub struct ProgramArgs {
@@ -236,10 +251,12 @@ pub struct ProgramArgs {
     pub https_input: HttpsInputArgs,
     #[command(flatten)]
     pub tls_input: TlsInputArgs,
+    /*
     #[command(flatten)]
     pub decryption_args: DecryptionArgs,
     #[command(flatten)]
     pub encryption_args: EncryptionArgs,
+    */
     #[command(flatten)]
     pub output: OutputArgs,
     #[command(flatten)]
@@ -248,6 +265,8 @@ pub struct ProgramArgs {
     pub https_output: HttpsOutputArgs,
     #[command(flatten)]
     pub tls_output: TlsOutputArgs,
+    #[command(flatten)]
+    pub logging_args: LoggingArgs,
 }
 
 impl ProgramArgs {

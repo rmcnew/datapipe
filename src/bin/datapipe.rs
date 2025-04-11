@@ -10,7 +10,11 @@ use std::process::ExitCode;
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = ProgramArgs::parse();
-    let _log_handle = match init_logger("/var/tmp", "datapipe") {
+    let log_dir = match args.logging_args.log_dir {
+        Some(ref log_dir_string) => log_dir_string,
+        None => "/var/tmp"
+    };
+    let _log_handle = match init_logger(&log_dir, "datapipe", args.logging_args.keep_logs) {
         Ok(handle) => handle,
         Err(error) => {
             eprintln!("Logger error: {}", error);
