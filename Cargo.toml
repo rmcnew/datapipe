@@ -1,9 +1,10 @@
 [package]
 name = "datapipe"
 version = "0.1.0"
-edition = "2021"
-authors = ["Richard Scott McNew"]
+edition = "2024"
+authors = ["Richard Scott McNew <richard.scott.mcnew@outlook.com>"]
 description = "Stream data from here to there"
+license = "AGPL-3.0-only"
 
 [lib]
 crate-type = ["lib"]
