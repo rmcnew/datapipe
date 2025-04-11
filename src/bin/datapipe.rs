@@ -9,6 +9,9 @@ use std::process::ExitCode;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Setup default crypto provider
+    rustls::crypto::ring::default_provider().install_default().expect("Failed to install ring as rustls crypto provider");
+
     let args = ProgramArgs::parse();
     let log_dir = match args.logging_args.log_dir {
         Some(ref log_dir_string) => log_dir_string,
