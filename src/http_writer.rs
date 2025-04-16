@@ -5,7 +5,7 @@ use log::{error, trace};
 use std::io::{Error, ErrorKind};
 use std::time::{Duration, Instant};
 
-
+#[derive(Debug)]
 pub struct HttpWriter {
     client: reqwest::Client,
     url: url::Url,

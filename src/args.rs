@@ -1,4 +1,6 @@
 use clap::{Args, Parser};
+use crate::datapipe_types::{DatapipeError, EncryptionKey, error_root_cause};
+use crate::encryption::{StreamDecryptor, StreamEncryptor};
 use crate::engine::Parameters;
 use crate::file_reader::FileReader;
 use crate::http_reader::HttpReader;
@@ -20,10 +22,9 @@ use std::path::PathBuf;
 use reqwest::{Certificate, tls::CertificateRevocationList, Identity};
 use rustls_pemfile::{certs, private_key};
 use std::fs::File;
-use std::io::{BufReader, Error, ErrorKind};
+use std::io::BufReader;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io;
 use tokio_rustls::rustls::client::danger::{
     HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
 };
@@ -117,25 +118,28 @@ pub struct TlsInputArgs {
     pub tls_input_skip_server_verify: bool, 
 }
 
-/*
+
 /// Additional parameters for decrypting input
 #[derive(Args, Debug, Clone)]
-#[group(required = false, multiple = true)]
+#[group(required = false, multiple = false)]
 pub struct DecryptionArgs {
-    /// decryption key to use after reading data
+    /// decryption key to use after reading data; must be exactly 51 bytes long
     #[arg(long = "decrypt")]
     pub decryption_key: Option<String>,
 }
 
 /// Additional parameters for encrypting output
 #[derive(Args, Debug, Clone)]
-#[group(required = false, multiple = true)]
+#[group(required = false, multiple = false)]
 pub struct EncryptionArgs {
-    /// encryption key to use before writing data
+    /// encryption key to use before writing data; must be exactly 51 bytes long
     #[arg(long = "encrypt")]
     pub encryption_key: Option<String>,
+    /// generate an encryption key
+    #[arg(long = "encrypt-generate-key", default_value_t = false)]
+    pub generate_encryption_key: bool,
 }
-*/
+
 
 /// Choose one or more output destinations
 #[derive(Args, Debug, Clone)]
@@ -251,12 +255,10 @@ pub struct ProgramArgs {
     pub https_input: HttpsInputArgs,
     #[command(flatten)]
     pub tls_input: TlsInputArgs,
-    /*
     #[command(flatten)]
     pub decryption_args: DecryptionArgs,
     #[command(flatten)]
     pub encryption_args: EncryptionArgs,
-    */
     #[command(flatten)]
     pub output: OutputArgs,
     #[command(flatten)]
@@ -272,35 +274,27 @@ pub struct ProgramArgs {
 impl ProgramArgs {
 
     /// Ensure that the input reader is set only once
-    fn check_reader_set(maybe_reader: &Option<Reader>) -> Result<(), Error> {
+    fn check_reader_set(maybe_reader: &Option<Reader>) -> Result<(), DatapipeError> {
         match maybe_reader.as_ref() {
             Some(reader) => {
                 let error_message = format!("Input previously assigned as {:?}; only one input can be used.", reader);
-                error!("{}", error_message);
-                Err(Error::new(ErrorKind::AlreadyExists, error_message))
+                error!("{error_message}");
+                Err(DatapipeError::ValidationError(error_message))
             }        
             None => Ok(())
         }    
     }
 
     /// Prepare a reader for file input
-    async fn handle_file_input(&self) -> Result<Reader, Error> {    
+    async fn handle_file_input(&self) -> Result<Reader, DatapipeError> {    
         let file_path = self.input.file_input.as_ref().unwrap(); // is_some checked in parent function
-        match FileReader::new(file_path).await {
-            Ok(file_reader) => {
-                info!("Using FILE input");
-                Ok(Reader::File(file_reader))            
-            }
-            Err(error) => {
-                let error_message = format!("File input error for '{:?}': {}", file_path, error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
-            }
-        }
+        let file_reader = FileReader::new(file_path).await?;
+        info!("Using FILE input");
+        Ok(Reader::File(file_reader))        
     }
 
     /// Prepare a reader for HTTP input
-    fn handle_http_input(&self) -> Result<Reader, Error> {
+    fn handle_http_input(&self) -> Result<Reader, DatapipeError> {
         let url = self.input.http_input.as_ref().unwrap();  // is_some checked in parent function
         let update_rate;
         if self.http_input.http_input_rate.is_some() {        
@@ -316,7 +310,7 @@ impl ProgramArgs {
     }
 
     /// Prepare a reader for HTTPS input
-    async fn handle_https_input(&self) -> Result<Reader, Error> {
+    async fn handle_https_input(&self) -> Result<Reader, DatapipeError> {
         let url = self.input.https_input.as_ref().unwrap();  // is_some checked in parent function    
         let read_rate;
         let maybe_root_certs;
@@ -341,9 +335,9 @@ impl ProgramArgs {
                     maybe_root_certs = Some(root_certs);
                 }
                 Err(error) => {
-                    let error_message = format!("Error getting root certificate at path {:?}: {}", root_cert_path, error);
-                    error!("{}", error_message);
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                    let error_message = format!("Error getting HTTPS input root certificate at path {:?}: {}", root_cert_path, error_root_cause(&error));
+                    error!("{error_message}");
+                    return Err(DatapipeError::InputOutputError(error_message));
                 }
             }        
         } else {
@@ -358,9 +352,9 @@ impl ProgramArgs {
                     maybe_crls = Some(crls);
                 }
                 Err(error) => {
-                    let error_message = format!("Error getting certificate revocation list at path {:?}: {}", crl_path, error);
-                    error!("{}", error_message);
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                    let error_message = format!("Error getting HTTPS input certificate revocation list at path {:?}: {}", crl_path, error_root_cause(&error));
+                    error!("{error_message}");
+                    return Err(DatapipeError::InputOutputError(error_message));
                 }
             }        
         } else {
@@ -375,9 +369,9 @@ impl ProgramArgs {
                     maybe_identity = Some(identity);
                 }
                 Err(error) => {
-                    let error_message = format!("Error getting client identity at path {:?}: {}", identity_path, error);
-                    error!("{}", error_message);
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                    let error_message = format!("Error getting HTTPS input client identity at path {:?}: {}", identity_path, error_root_cause(&error));
+                    error!("{error_message}");
+                    return Err(DatapipeError::InputOutputError(error_message));
                 }
             }        
         } else {
@@ -395,35 +389,35 @@ impl ProgramArgs {
         Reader::Stdin(StdinReader::new())
     }
 
-    async fn handle_tcp_input(&self) -> Result<Reader, Error> {
+    async fn handle_tcp_input(&self) -> Result<Reader, DatapipeError> {
         let address = self.input.tcp_input.as_ref().unwrap();
         match TcpReaderWriter::new(address).await {
             Ok(tcp_reader) => {
                 Ok(Reader::Tcp(tcp_reader))
             }
             Err(error) => {
-                let error_message = format!("TCP input error {}: {}", &address, error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+                let error_message = format!("TCP input error {}: {}", &address, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
             }
         }
     }
 
-    async fn handle_tcp_listen_input(&self) -> Result<Reader, Error> {
+    async fn handle_tcp_listen_input(&self) -> Result<Reader, DatapipeError> {
         let address = self.input.tcp_listen_input.as_ref().unwrap();
         match TcpListenReader::new(address).await {
             Ok(tcp_listen_reader) => {
                 Ok(Reader::TcpListen(tcp_listen_reader))
             }
             Err(error) => {
-                let error_message = format!("TCP listen input error {}: {}", &address, error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+                let error_message = format!("TCP listen input error {}: {}", &address, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
             }
         }
     }
 
-    async fn handle_tls_input(&self) -> Result<Reader, Error> {
+    async fn handle_tls_input(&self) -> Result<Reader, DatapipeError> {
         let address = self.input.tls_input.as_ref().unwrap();        
         match self.get_tls_input_config() {
             Ok(tls_config) => match TlsReaderWriter::new(address.to_owned(), tls_config).await {
@@ -432,20 +426,20 @@ impl ProgramArgs {
                     Ok(Reader::Tls(tls_reader))                
                 }
                 Err(error) => {
-                    let error_message = format!("TLS input error {}: {}", &address, error);
-                    error!("{}", error_message);
-                    Err(Error::new(error.kind(), error_message))
+                    let error_message = format!("TLS input error {}: {}", &address, error_root_cause(&error));
+                    error!("{error_message}");
+                    Err(DatapipeError::InputOutputError(error_message))
                 }
             },
             Err(error) => {
-                let error_message = format!("TLS setup error: {}", error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+                let error_message = format!("TLS input setup error: {}", error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
             }
         }
     }
 
-    fn get_tls_input_config(&self) -> Result<ClientConfig, std::io::Error> {
+    fn get_tls_input_config(&self) -> Result<ClientConfig, DatapipeError> {
         // setup root cert store
         let mut root_cert_store = RootCertStore::empty();
         root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
@@ -457,9 +451,9 @@ impl ProgramArgs {
                 Ok(()) => {} // no issues loading CA roots
                 Err(error) => {
                     let error_message =
-                        format!("Error loading certificate authority (CA) roots: {}", error);
-                    error!("{}", error_message);
-                    return Err(Error::new(ErrorKind::Other, error_message));
+                        format!("Error loading TLS input certificate authority (CA) roots: {}", error_root_cause(&error));
+                    error!("{error_message}");
+                    return Err(DatapipeError::InputOutputError(error_message));
                 }
             }
         }
@@ -490,39 +484,39 @@ impl ProgramArgs {
                                                 return Ok(tls_config);
                                             }
                                             Err(error) => {
-                                                let error_message = format!("Error creating TLS config with cert chain and client key: {}", error);
-                                                error!("{}", error_message);
-                                                return Err(Error::new(ErrorKind::Other, error_message));
+                                                let error_message = format!("Error creating TLS input config with cert chain and client key: {}", error_root_cause(&error));
+                                                error!("{error_message}");
+                                                return Err(DatapipeError::InputOutputError(error_message));
                                             }
                                         }
                                     }
                                     Err(error) => {
                                         // failed to get client key
                                         let error_message = format!(
-                                            "Error getting client key {:?}: {}",
-                                            tls_client_key_path, error
+                                            "Error getting TLS input client key {:?}: {}",
+                                            tls_client_key_path, error_root_cause(&error)
                                         );
-                                        error!("{}", error_message);
-                                        return Err(Error::new(ErrorKind::Other, error_message));
+                                        error!("{error_message}");
+                                        return Err(DatapipeError::InputOutputError(error_message));
                                     }
                                 }
                             }
                             None => {
                                 // the user should have provided a client key too
-                                let error_message = "Certificate chain (--tls-cert-chain) requires client key (--tls-client-key) to also be used";
-                                error!("{}", error_message);
-                                return Err(Error::new(ErrorKind::Other, error_message));
+                                let error_message = "TLS input certificate chain (--tls-input-cert-chain) requires client key (--tls-input-client-key) to also be used";
+                                error!("{error_message}");
+                                return Err(DatapipeError::ValidationError(error_message.to_string()));
                             }
                         }
                     }
                     Err(error) => {
                         // failed to get cert chain
                         let error_message = format!(
-                            "Error getting certificate chain {:?}: {}",
-                            tls_cert_chain_path, error
+                            "Error getting TLS input certificate chain {:?}: {}",
+                            tls_cert_chain_path, error_root_cause(&error)
                         );
-                        error!("{}", error_message);
-                        return Err(Error::new(ErrorKind::Other, error_message));
+                        error!("{error_message}");
+                        return Err(DatapipeError::InputOutputError(error_message));
                     }
                 }
             }
@@ -530,9 +524,9 @@ impl ProgramArgs {
                 // make sure the user did not give a client certificate too
                 if self.tls_input.tls_input_client_key.is_some() {
                     // error: a cert chain is needed if the user is providing a client key
-                    let error_message = "Client key (--tls-client-key) requires certificate chain (--tls-cert-chain) to also be used";
-                    error!("{}", error_message);
-                    return Err(Error::new(ErrorKind::Other, error_message));
+                    let error_message = "TLS input client key (--tls-input-client-key) requires certificate chain (--tls-input-cert-chain) to also be used";
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError(error_message.to_string()));
                 }
                 // finishing build the config with no client authentication
                 return Ok(config.with_no_client_auth());
@@ -541,7 +535,7 @@ impl ProgramArgs {
     }
 
     /// Prepare a reader for UDP input
-    async fn handle_udp_input(&self) -> Result<Reader, Error> {
+    async fn handle_udp_input(&self) -> Result<Reader, DatapipeError> {
         let address = self.input.udp_input.as_ref().unwrap();  // is_some checked in parent function
         match UdpReader::new(address).await {
             Ok(udp_reader) => {            
@@ -550,16 +544,16 @@ impl ProgramArgs {
             }
             Err(error) => {
                 let error_message =
-                    format!("Cannot open input UDP address {:?}: {}", &address, error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+                    format!("Cannot open input UDP address {:?}: {}", &address, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
             }
         }
     }
 
 
     /// Select the wanted input implementation from the command line args
-    pub async fn get_input_reader(&self) -> Result<Reader, Error> {    
+    async fn get_input_reader(&self) -> Result<Reader, DatapipeError> {    
         let mut maybe_reader: Option<Reader> = None;
         if self.input.file_input.is_some() {
             Self::check_reader_set(&maybe_reader)?;
@@ -597,13 +591,13 @@ impl ProgramArgs {
             Some(reader) => Ok(reader),
             None => {
                 let error_message = "No input source provided!";
-                error!("{}", error_message);
-                return Err(Error::new(ErrorKind::InvalidInput, error_message));
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message.to_string()));
             }
         }    
     }
 
-    async fn handle_file_output(&self) -> Result<Writer, Error> {
+    async fn handle_file_output(&self) -> Result<Writer, DatapipeError> {
         let file_path = self.output.file_output.as_ref().unwrap();        
         match FileWriter::new(&file_path).await {
             Ok(file_writer) => {            
@@ -611,14 +605,14 @@ impl ProgramArgs {
                 Ok(Writer::File(file_writer))
             }
             Err(error) => {
-                let error_message = format!("File output error {:?}: {}", file_path, error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+                let error_message = format!("File output error {:?}: {}", file_path, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
             }
         }
     }
 
-    fn handle_http_output(&self) -> Result<Writer, Error> {
+    fn handle_http_output(&self) -> Result<Writer, DatapipeError> {
         let url = self.output.http_output.as_ref().unwrap();        
         let output_rate: Duration;
         let delimiter: Vec<u8>;
@@ -644,14 +638,14 @@ impl ProgramArgs {
                 Ok(Writer::Http(http_writer))            
             }
             Err(error) => {
-                let error_message = format!("HTTP URL error {}: {}", &url, error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+                let error_message = format!("HTTP URL error {}: {}", &url, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
             }
         }
     }
 
-    async fn handle_https_output(&self) -> Result<Writer, Error> {
+    async fn handle_https_output(&self) -> Result<Writer, DatapipeError> {
         let url = self.output.http_output.as_ref().unwrap();        
         let write_rate;
         let delimiter: Vec<u8>;
@@ -689,9 +683,9 @@ impl ProgramArgs {
                     maybe_root_certs = Some(root_certs);
                 }
                 Err(error) => {
-                    let error_message = format!("Error getting root certificate at path {:?}: {}", root_cert_path, error);
-                    error!("{}", error_message);
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                    let error_message = format!("Error getting HTTPS output root certificate at path {:?}: {}", root_cert_path, error_root_cause(&error));
+                    error!("{error_message}");
+                    return Err(DatapipeError::InputOutputError(error_message));
                 }
             }        
         } else {
@@ -706,9 +700,9 @@ impl ProgramArgs {
                     maybe_crls = Some(crls);
                 }
                 Err(error) => {
-                    let error_message = format!("Error getting certificate revocation list at path {:?}: {}", crl_path, error);
-                    error!("{}", error_message);
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                    let error_message = format!("Error getting HTTPS output certificate revocation list at path {:?}: {}", crl_path, error_root_cause(&error));
+                    error!("{error_message}");
+                    return Err(DatapipeError::InputOutputError(error_message));
                 }
             }        
         } else {
@@ -723,9 +717,9 @@ impl ProgramArgs {
                     maybe_identity = Some(identity);
                 }
                 Err(error) => {
-                    let error_message = format!("Error getting client identity at path {:?}: {}", identity_path, error);
-                    error!("{}", error_message);
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error_message));
+                    let error_message = format!("Error getting HTTPS output client identity at path {:?}: {}", identity_path, error_root_cause(&error));
+                    error!("{error_message}");
+                    return Err(DatapipeError::InputOutputError(error_message));
                 }
             }        
         } else {
@@ -738,9 +732,9 @@ impl ProgramArgs {
                 Ok(Writer::Https(https_writer))            
             }
             Err(error) => {
-                let error_message = format!("HTTPS URL error {}: {}", &url, error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+                let error_message = format!("HTTPS output URL error {}: {}", &url, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::ValidationError(error_message))
             }
         }
     }
@@ -750,43 +744,38 @@ impl ProgramArgs {
         Writer::Stdout(StdoutWriter::new())
     }
 
-    async fn handle_tcp_output(&self) -> Result<Writer, Error> {
+    async fn handle_tcp_output(&self) -> Result<Writer, DatapipeError> {
         let address = self.output.tcp_output.as_ref().unwrap();
         match TcpReaderWriter::new(address).await {
             Ok(tcp_writer) => {
                 Ok(Writer::Tcp(tcp_writer))
             }
             Err(error) => {
-                let error_message = format!("TCP output error {}: {}", &address, error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+                let error_message = format!("TCP output error {}: {}", &address, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::ValidationError(error_message))
             }
         }
     }
 
-    async fn handle_tls_output(&self) -> Result<Writer, Error> {
+    async fn handle_tls_output(&self) -> Result<Writer, DatapipeError> {
         let address = self.output.tls_output.as_ref().unwrap();        
-        match self.get_tls_output_config() {
-            Ok(tls_config) => match TlsReaderWriter::new(address.to_owned(), tls_config).await {
-                Ok(tls_writer) => {
-                    info!("Using TLS output");
-                    Ok(Writer::Tls(tls_writer))                
-                }
-                Err(error) => {
-                    let error_message = format!("TLS output error {}: {}", &address, error);
-                    error!("{}", error_message);
-                    Err(Error::new(error.kind(), error_message))
-                }
-            },
-            Err(error) => {
-                let error_message = format!("TLS setup error: {}", error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+        let tls_config = self.get_tls_output_config()?;        
+        match TlsReaderWriter::new(address.to_owned(), tls_config).await {
+            Ok(tls_writer) => {
+                info!("Using TLS output");
+                Ok(Writer::Tls(tls_writer))                
             }
+            Err(error) => {
+                let error_message = format!("TLS output error {}: {}", &address, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
+            }
+        
         }
     }
 
-    fn get_tls_output_config(&self) -> Result<ClientConfig, std::io::Error> {
+    fn get_tls_output_config(&self) -> Result<ClientConfig, DatapipeError> {
         // setup root cert store
         let mut root_cert_store = RootCertStore::empty();
         root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
@@ -798,9 +787,9 @@ impl ProgramArgs {
                 Ok(()) => {} // no issues loading CA roots
                 Err(error) => {
                     let error_message =
-                        format!("Error loading certificate authority (CA) roots: {}", error);
-                    error!("{}", error_message);
-                    return Err(Error::new(ErrorKind::Other, error_message));
+                        format!("Error loading TLS output certificate authority (CA) roots: {}", error_root_cause(&error));
+                    error!("{error_message}");
+                    return Err(DatapipeError::InputOutputError(error_message));
                 }
             }
         }
@@ -818,62 +807,37 @@ impl ProgramArgs {
         match self.tls_output.tls_output_cert_chain.as_ref() {
             Some(tls_cert_chain_path) => {
                 // get certificate chain
-                match get_tls_cert_chain(tls_cert_chain_path) {
-                    Ok(cert_chain) => {
-                        // get client certificate
-                        match self.tls_output.tls_output_client_key.as_ref() {
-                            Some(tls_client_key_path) => {
-                                match get_tls_client_key(tls_client_key_path) {
-                                    Ok(client_key) => {
-                                        // finish building the config with cert chain and client key
-                                        match config.with_client_auth_cert(cert_chain, client_key) {
-                                            Ok(tls_config) => {
-                                                return Ok(tls_config);
-                                            }
-                                            Err(error) => {
-                                                let error_message = format!("Error creating TLS config with cert chain and client key: {}", error);
-                                                error!("{}", error_message);
-                                                return Err(Error::new(ErrorKind::Other, error_message));
-                                            }
-                                        }
-                                    }
-                                    Err(error) => {
-                                        // failed to get client key
-                                        let error_message = format!(
-                                            "Error getting client key {:?}: {}",
-                                            tls_client_key_path, error
-                                        );
-                                        error!("{}", error_message);
-                                        return Err(Error::new(ErrorKind::Other, error_message));
-                                    }
-                                }
+                let cert_chain = get_tls_cert_chain(tls_cert_chain_path)?;
+                // get client certificate
+                match self.tls_output.tls_output_client_key.as_ref() {
+                    Some(tls_client_key_path) => {
+                        let client_key = get_tls_client_key(tls_client_key_path)?;                                    
+                        // finish building the config with cert chain and client key
+                        match config.with_client_auth_cert(cert_chain, client_key) {
+                            Ok(tls_config) => {
+                                return Ok(tls_config);
                             }
-                            None => {
-                                // the user should have provided a client key too
-                                let error_message = "Certificate chain (--tls-cert-chain) requires client key (--tls-client-key) to also be used";
-                                error!("{}", error_message);
-                                return Err(Error::new(ErrorKind::Other, error_message));
+                            Err(error) => {
+                                let error_message = format!("Error creating TLS output config with cert chain and client key: {}", error_root_cause(&error));
+                                error!("{error_message}");
+                                return Err(DatapipeError::ValidationError(error_message));
                             }
                         }
                     }
-                    Err(error) => {
-                        // failed to get cert chain
-                        let error_message = format!(
-                            "Error getting certificate chain {:?}: {}",
-                            tls_cert_chain_path, error
-                        );
-                        error!("{}", error_message);
-                        return Err(Error::new(ErrorKind::Other, error_message));
+                    None => {
+                        // the user should have provided a client key too
+                        let error_message = "TLS output certificate chain (--tls-output-cert-chain) requires client key (--tls-output-client-key) to also be used";
+                        error!("{error_message}");
+                        return Err(DatapipeError::ValidationError(error_message.to_string()));
                     }
                 }
             }
             None => {
                 // make sure the user did not give a client certificate too
-                if self.tls_output.tls_output_client_key.is_some() {
-                    // error: a cert chain is needed if the user is providing a client key
-                    let error_message = "Client key (--tls-client-key) requires certificate chain (--tls-cert-chain) to also be used";
-                    error!("{}", error_message);
-                    return Err(Error::new(ErrorKind::Other, error_message));
+                if self.tls_output.tls_output_client_key.is_some() {                    
+                    let error_message = "TLS output client key (--tls-output-client-key) requires certificate chain (--tls-output-cert-chain) to also be used";
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError(error_message.to_string()));
                 }
                 // finishing build the config with no client authentication
                 return Ok(config.with_no_client_auth());
@@ -881,7 +845,7 @@ impl ProgramArgs {
         }
     }
 
-    async fn handle_udp_output(&self) -> Result<Writer, Error> {
+    async fn handle_udp_output(&self) -> Result<Writer, DatapipeError> {
         let address = self.output.udp_output.as_ref().unwrap();        
         match UdpWriter::new(&address).await {
             Ok(udp_writer) => {
@@ -889,14 +853,14 @@ impl ProgramArgs {
                 Ok(Writer::Udp(udp_writer))            
             }
             Err(error) => {
-                let error_message = format!("UDP output error {}: {}", address, error);
-                error!("{}", error_message);
-                Err(Error::new(error.kind(), error_message))
+                let error_message = format!("UDP output error {}: {}", address, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::ValidationError(error_message))
             }
         }        
     }
 
-    pub async fn get_output_writers(&self) -> Result<Vec<Writer>, Error> {
+    async fn get_output_writers(&self) -> Result<Vec<Writer>, DatapipeError> {
         let mut writers: Vec<Writer> = Vec::new();
         if self.output.file_output.is_some() {
             let file_writer = self.handle_file_output().await?;
@@ -927,23 +891,49 @@ impl ProgramArgs {
             writers.push(udp_writer);
         }        
         if writers.is_empty() {
-            let error = "No output destination provided!";
-            error!("{}", error);
-            Err(Error::new(io::ErrorKind::InvalidInput, error))
+            let error_message = "No output destination provided!";
+            error!("{error_message}");
+            Err(DatapipeError::ValidationError(error_message.to_string()))
         } else {
             Ok(writers)
         }
     }
 
     
-    pub async fn to_parameters(&self) -> Result<Parameters, std::io::Error> {
+    fn get_encryption_args(&self) -> Result<Option<StreamEncryptor>, DatapipeError> {        
+        if self.encryption_args.generate_encryption_key {
+            let encryption_key = EncryptionKey::generate();
+            println!("Generated encryption key: {}", encryption_key.to_string());
+            let encryptor = StreamEncryptor::new(encryption_key)?;
+            return Ok(Some(encryptor));
+        } 
+        if self.encryption_args.encryption_key.is_some() {
+            let encryption_key = EncryptionKey::new(self.encryption_args.encryption_key.as_ref().unwrap()).unwrap();
+            let encryptor = StreamEncryptor::new(encryption_key)?;
+            return Ok(Some(encryptor));
+        }
+        Ok(None)
+    }
+
+    fn get_decryption_args(&self) -> Result<Option<StreamDecryptor>, DatapipeError> {
+        if self.decryption_args.decryption_key.is_some() {
+            let encryption_key = EncryptionKey::new(self.decryption_args.decryption_key.as_ref().unwrap()).unwrap();
+            let decryptor = StreamDecryptor::new(encryption_key)?;
+            return Ok(Some(decryptor));
+        }
+        Ok(None)
+    }
+
+    pub async fn to_parameters(&self) -> Result<Parameters, DatapipeError> {
         let reader = self.get_input_reader().await?;
         let writers = self.get_output_writers().await?;
+        let maybe_decryptor = self.get_decryption_args()?;
+        let maybe_encryptor = self.get_encryption_args()?;
         
         Ok(Parameters{
             reader,
-            maybe_decryption_key: None,
-            maybe_encryption_key: None,
+            maybe_decryptor,
+            maybe_encryptor,
             writers
         })
     }
@@ -954,7 +944,7 @@ impl ProgramArgs {
 fn get_root_ca(
     tls_root_ca_path: &PathBuf,
     root_cert_store: &mut RootCertStore,
-) -> Result<(), std::io::Error> {
+) -> Result<(), DatapipeError> {
     match File::open(tls_root_ca_path) {
         Ok(tls_root_ca_file) => {
             let mut root_ca_buffer = BufReader::new(tls_root_ca_file);
@@ -966,19 +956,19 @@ fn get_root_ca(
                                 // successfully added, keep going
                             }
                             Err(error) => {
-                                let error_message = format!("Error adding certificate authority (CA) to root cert store: {}", error);
-                                error!("{}", error_message);
-                                return Err(Error::new(ErrorKind::Other, error_message));
+                                let error_message = format!("Error adding certificate authority (CA) to root cert store: {}", error_root_cause(&error));
+                                error!("{error_message}");
+                                return Err(DatapipeError::ValidationError(error_message));
                             }
                         }
                     }
                     Err(error) => {
                         let error_message = format!(
                             "Error parsing certificate authority (CA) from {:?}: {}",
-                            &tls_root_ca_path, error
+                            &tls_root_ca_path, error_root_cause(&error)
                         );
-                        error!("{}", error_message);
-                        return Err(Error::new(ErrorKind::Other, error_message));
+                        error!("{error_message}");
+                        return Err(DatapipeError::ValidationError(error_message));
                     }
                 }
             }
@@ -986,10 +976,10 @@ fn get_root_ca(
         Err(error) => {
             let error_message = format!(
                 "Cannot open TLS root CA file: {:?}: {}",
-                &tls_root_ca_path, error
+                &tls_root_ca_path, error_root_cause(&error)
             );
-            error!("{}", error_message);
-            return Err(Error::new(ErrorKind::InvalidInput, error_message));
+            error!("{error_message}");
+            return Err(DatapipeError::InputOutputError(error_message));
         }
     }
     Ok(())
@@ -997,7 +987,7 @@ fn get_root_ca(
 
 fn get_tls_cert_chain(
     tls_cert_chain_path: &PathBuf,
-) -> Result<Vec<CertificateDer<'static>>, std::io::Error> {
+) -> Result<Vec<CertificateDer<'static>>, DatapipeError> {
     let mut cert_chain = Vec::new();
     match File::open(tls_cert_chain_path) {
         Ok(tls_cert_chain_file) => {
@@ -1009,9 +999,9 @@ fn get_tls_cert_chain(
                     }
                     Err(error) => {
                         let error_message =
-                            format!("Error adding certificate to certificate chain: {}", error);
-                        error!("{}", error_message);
-                        return Err(Error::new(ErrorKind::Other, error_message));
+                            format!("Error adding certificate to certificate chain: {}", error_root_cause(&error));
+                        error!("{error_message}");
+                        return Err(DatapipeError::InputOutputError(error_message));
                     }
                 }
             }
@@ -1019,10 +1009,10 @@ fn get_tls_cert_chain(
         Err(error) => {
             let error_message = format!(
                 "Cannot open TLS certificate chain file: {:?}: {}",
-                &tls_cert_chain_path, error
+                &tls_cert_chain_path, error_root_cause(&error)
             );
-            error!("{}", error_message);
-            return Err(Error::new(ErrorKind::InvalidInput, error_message));
+            error!("{error_message}");
+            return Err(DatapipeError::InputOutputError(error_message));
         }
     }
     Ok(cert_chain)
@@ -1030,7 +1020,7 @@ fn get_tls_cert_chain(
 
 fn get_tls_client_key(
     tls_client_key_path: &PathBuf,
-) -> Result<PrivateKeyDer<'static>, std::io::Error> {
+) -> Result<PrivateKeyDer<'static>, DatapipeError> {
     let private_key_der: PrivateKeyDer<'static>;
     match File::open(tls_client_key_path) {
         Ok(tls_client_key_file) => {
@@ -1045,34 +1035,34 @@ fn get_tls_client_key(
                             "Private key not found in file: {:?}; file must be in PEM format",
                             &tls_client_key_path
                         );
-                        error!("{}", error_message);
-                        return Err(Error::new(ErrorKind::InvalidInput, error_message));
+                        error!("{error_message}");
+                        return Err(DatapipeError::ValidationError(error_message));
                     }
                 },
                 Err(error) => {
                     let error_message = format!(
                         "Invalid or corrupted TLS client key file: {:?}: {}",
-                        &tls_client_key_path, error
+                        &tls_client_key_path, error_root_cause(&error)
                     );
-                    error!("{}", error_message);
-                    return Err(Error::new(ErrorKind::InvalidInput, error_message));
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError(error_message));
                 }
             }
         }
         Err(error) => {
             let error_message = format!(
                 "Cannot open TLS client key file: {:?}: {}",
-                &tls_client_key_path, error
+                &tls_client_key_path, error_root_cause(&error)
             );
-            error!("{}", error_message);
-            return Err(Error::new(ErrorKind::InvalidInput, error_message));
+            error!("{error_message}");
+            return Err(DatapipeError::InputOutputError(error_message));
         }
     }
     Ok(private_key_der)
 }
 
-// to allow for --tls-skip-server-verify to work
-// NOTE:  this is dangerous to use and should not be used in production
+/// Create a custom NO-OP verifier to allow --tls-skip-server-verify to work
+/// NOTE:  this is DANGEROUS and should not be used in production!
 #[derive(Debug)]
 struct NoCertificateVerification {}
 

@@ -6,6 +6,7 @@ use reqwest::{Certificate, tls::CertificateRevocationList, Identity};
 use std::io::{Error, ErrorKind};
 use std::time::Duration;
 
+#[derive(Debug)]
 pub struct HttpsWriter {
     client: reqwest::Client,
     url: url::Url,

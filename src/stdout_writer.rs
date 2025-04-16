@@ -4,6 +4,7 @@ use crate::datapipe_types::OutputWriter;
 use std::io::Error;
 use tokio::io::AsyncWriteExt;
 
+#[derive(Debug)]
 pub struct StdoutWriter {}
 
 impl StdoutWriter {

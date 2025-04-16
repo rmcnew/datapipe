@@ -1,5 +1,6 @@
 pub mod args;
 pub mod datapipe_types;
+pub mod encryption;
 pub mod engine;
 pub mod file_reader;
 pub mod file_writer;

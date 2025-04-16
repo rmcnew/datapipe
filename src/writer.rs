@@ -9,6 +9,7 @@ use crate::udp_writer::UdpWriter;
 use std::io::Error;
 
 // Combined writer
+#[derive(Debug)]
 pub enum Writer {
     File(FileWriter),
     Http(HttpWriter),

@@ -5,6 +5,7 @@ use std::io::Error;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 
+#[derive(Debug)]
 pub struct FileWriter {
     file: tokio::fs::File,
 }

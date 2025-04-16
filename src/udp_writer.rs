@@ -5,6 +5,7 @@ use log::{error, trace};
 use std::io::Error;
 use tokio::net::UdpSocket;
 
+#[derive(Debug)]
 pub struct UdpWriter {
     socket: UdpSocket,
 }
