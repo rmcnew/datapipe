@@ -4,6 +4,7 @@ use bytes::Bytes;
 use crate::datapipe_types::InputReader;
 use log::trace;
 use std::io::Error;
+use std::net::Ipv4Addr;
 use tokio::net::UdpSocket;
 
 #[derive(Debug)]
@@ -16,6 +17,19 @@ impl UdpReader {
         trace!("UdpReader listening on {}", address);
         match UdpSocket::bind(address).await {
             Ok(socket) => Ok(Self { socket }),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn new_multicast(address: &str) -> Result<UdpReader, Error> {
+        trace!("UdpReader multicast listening on {}", address);
+        let addr = address.parse::<Ipv4Addr>().unwrap();
+        let addr_port_zero = format!("{}:0", addr);
+        match UdpSocket::bind(addr_port_zero).await {
+            Ok(socket) => {
+                socket.join_multicast_v4(addr, Ipv4Addr::UNSPECIFIED)?;
+                Ok(UdpReader { socket })
+            },
             Err(error) => Err(error),
         }
     }

@@ -64,7 +64,10 @@ pub struct InputArgs {
     pub tls_input: Option<String>,
     /// read data from UDP address
     #[arg(long = "udp-input")]
-    pub udp_input: Option<String>,   
+    pub udp_input: Option<String>,
+    /// read data from a UDP multicast address
+    #[arg(long = "udp-multicast-input")]
+    pub udp_multicast_input: Option<String>,
 }
 
 /// Additional parameters for HTTP input
@@ -551,6 +554,22 @@ impl ProgramArgs {
         }
     }
 
+    /// Prepare a reader for UDP multicast input
+    async fn handle_udp_multicast_input(&self) -> Result<Reader, DatapipeError> {
+        let address = self.input.udp_multicast_input.as_ref().unwrap();
+        match UdpReader::new_multicast(address).await {
+            Ok(udp_reader) => {            
+                info!("Using UDP multicast input");
+                Ok(Reader::Udp(udp_reader))
+            }
+            Err(error) => {
+                let error_message =
+                    format!("Cannot open input UDP multicast address {:?}: {}", &address, error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
+            }
+        }
+    }
 
     /// Select the wanted input implementation from the command line args
     async fn get_input_reader(&self) -> Result<Reader, DatapipeError> {    
@@ -586,6 +605,10 @@ impl ProgramArgs {
         if self.input.udp_input.is_some() {
             Self::check_reader_set(&maybe_reader)?;
             maybe_reader = Some(self.handle_udp_input().await?);        
+        }
+        if self.input.udp_multicast_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_udp_multicast_input().await?);        
         }    
         match maybe_reader {
             Some(reader) => Ok(reader),
