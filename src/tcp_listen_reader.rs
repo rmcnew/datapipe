@@ -1,8 +1,7 @@
+use crate::datapipe_types::InputReader;
 /// "Listen for connection, then pull" Reader for TCP
-
 use bytes::Bytes;
 use core::net::SocketAddr;
-use crate::datapipe_types::InputReader;
 use log::{error, trace};
 use std::io::{Error, ErrorKind};
 use tokio::net::{TcpListener, TcpStream};
@@ -19,7 +18,10 @@ impl TcpListenReader {
     pub async fn new(address: &str) -> Result<Self, Error> {
         trace!("TcpListenReader listening on {}", address);
         match TcpListener::bind(address).await {
-            Ok(tcp_listener) => Ok(Self { tcp_listener, maybe_tcp_stream: None }),
+            Ok(tcp_listener) => Ok(Self {
+                tcp_listener,
+                maybe_tcp_stream: None,
+            }),
             Err(error) => Err(error),
         }
     }
@@ -40,10 +42,10 @@ impl InputReader for TcpListenReader {
                 Err(error) => {
                     let error_message = format!("Error accepting connection: {}", error);
                     error!("{}", error_message);
-                    return Err(Error::new(ErrorKind::ConnectionAborted, error_message))
+                    return Err(Error::new(ErrorKind::ConnectionAborted, error_message));
                 }
             }
-        }        
+        }
         match &self.maybe_tcp_stream {
             Some(tcp_stream) => {
                 tcp_stream.readable().await?;
@@ -56,11 +58,12 @@ impl InputReader for TcpListenReader {
                     Err(error) => Err(error),
                 }
             }
-            None => {  // this should not be possible
+            None => {
+                // this should not be possible
                 let error_message = format!("Error TcpStream initialization failure");
                 error!("{}", error_message);
-                return Err(Error::new(ErrorKind::NotConnected, error_message))
+                return Err(Error::new(ErrorKind::NotConnected, error_message));
             }
-        }      
+        }
     }
 }

@@ -1,15 +1,14 @@
 /// wrapper for logging implementation
 /// use the standard log crate interface and wrap the log4rs for the implementation
-
 use log::{LevelFilter, SetLoggerError};
-use log4rs::{self, Handle};
+use log4rs::append::console::ConsoleAppender;
+use log4rs::append::rolling_file::policy::compound::CompoundPolicy;
 use log4rs::append::rolling_file::policy::compound::roll::fixed_window::FixedWindowRoller;
 use log4rs::append::rolling_file::policy::compound::trigger::size::SizeTrigger;
-use log4rs::append::rolling_file::policy::compound::CompoundPolicy;
-use log4rs::append::console::ConsoleAppender;
 use log4rs::config::{Appender, Config, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::filter::threshold::ThresholdFilter;
+use log4rs::{self, Handle};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -26,7 +25,6 @@ const LOG_ENTRY_PATTERN: &str = "{d(%Y-%m-%dT%H:%M:%S)} [{l}] {f}:{L} {m}\n";
 /// log level to use
 const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Info;
 
-
 /// this logger struct is returned to the application
 pub struct Logger {
     /// where the log files will be written
@@ -34,7 +32,7 @@ pub struct Logger {
     /// the prefix of the log files
     pub log_path: PathBuf,
     /// the prefix of the archive log files
-    pub archive_prefix: String,    
+    pub archive_prefix: String,
     /// the logger handle can be used to change the logger settings on the fly if wanted
     pub handle: Handle,
     /// should logs be kept when the program exits?
@@ -67,7 +65,6 @@ impl Drop for Logger {
     }
 }
 
-
 // Silence the logger by setting logger config to console logging and maximum filtering (turn logging off)
 pub fn silence(handle: &mut Handle) {
     let silent_config = Config::builder()
@@ -81,9 +78,8 @@ pub fn silence(handle: &mut Handle) {
     handle.set_config(silent_config);
 }
 
-
-pub fn init_logger(    
-    log_directory: &str,    
+pub fn init_logger(
+    log_directory: &str,
     log_basename: &str,
     keep_logs: bool,
 ) -> Result<Logger, SetLoggerError> {
@@ -131,7 +127,7 @@ pub fn init_logger(
     Ok(Logger {
         log_directory: Path::new(log_directory).to_path_buf(),
         log_path,
-        archive_prefix,        
+        archive_prefix,
         handle,
         keep_logs,
     })
@@ -142,7 +138,7 @@ pub fn init_console_logger() -> Result<Handle, SetLoggerError> {
     let console_config = Config::builder()
         .appender(
             Appender::builder()
-                .filter(Box::new(ThresholdFilter::new(log::LevelFilter::Info))) 
+                .filter(Box::new(ThresholdFilter::new(log::LevelFilter::Info)))
                 .build(
                     "console",
                     Box::new(

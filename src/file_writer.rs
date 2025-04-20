@@ -1,5 +1,4 @@
 /// Writer for file output
-
 use crate::datapipe_types::OutputWriter;
 use std::io::Error;
 use std::path::Path;

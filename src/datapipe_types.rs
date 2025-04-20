@@ -2,7 +2,7 @@
 use bytes::Bytes;
 use log::error;
 use rand::distr::Alphanumeric;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::io::{Error, ErrorKind};
 use url::Url;
 
@@ -12,7 +12,7 @@ use url::Url;
 pub enum DatapipeError {
     /// Input-Output error
     #[error("InputOutputError: {0}")]
-    InputOutputError(String),    
+    InputOutputError(String),
     /// Encryption error
     #[error("EncryptionError: {0}")]
     EncryptionError(String),
@@ -34,7 +34,7 @@ impl From<std::io::Error> for DatapipeError {
     }
 }
 
-// get the cause of an error    
+// get the cause of an error
 pub fn error_root_cause(mut err: &(dyn std::error::Error + 'static)) -> String {
     use std::fmt::Write;
     let mut s = format!("{}", err);
@@ -60,7 +60,7 @@ pub trait OutputWriter {
 // type definitions
 // No types needed for stdin and stdout
 // Path and PathBuf for file reader and file writer
-// TCP, TLS, and UDP readers and writers use String or str with the tokio::net::ToSocketAddrs 
+// TCP, TLS, and UDP readers and writers use String or str with the tokio::net::ToSocketAddrs
 //    to handle DNS resolution
 // HTTP and HTTPS use url::Url
 
@@ -90,23 +90,27 @@ impl EncryptionKey {
     /// create an EncryptionKey using the provided String; must be exactly 51 bytes
     pub fn new(encryption_key: &str) -> Result<Self, DatapipeError> {
         if encryption_key.len() != Self::REQUIRED_LENGTH {
-            let error_message = format!("Encryption key must be {} bytes long; provided encryption key is {} bytes long", Self::REQUIRED_LENGTH, encryption_key.len());
+            let error_message = format!(
+                "Encryption key must be {} bytes long; provided encryption key is {} bytes long",
+                Self::REQUIRED_LENGTH,
+                encryption_key.len()
+            );
             error!("{error_message}");
             return Err(DatapipeError::ValidationError(error_message));
         }
         let encryption_key_bytes = encryption_key.as_bytes();
-        Ok(Self { 
-            key: <KeyBytes>::try_from(&encryption_key_bytes[0..32]).unwrap(), 
-            nonce: <NonceBytes>::try_from(&encryption_key_bytes[32..]).unwrap() 
+        Ok(Self {
+            key: <KeyBytes>::try_from(&encryption_key_bytes[0..32]).unwrap(),
+            nonce: <NonceBytes>::try_from(&encryption_key_bytes[32..]).unwrap(),
         })
     }
 
     pub fn generate() -> Self {
         let encryption_key = generate_random_string(Self::REQUIRED_LENGTH);
         let encryption_key_bytes = encryption_key.into_bytes();
-        Self { 
-            key: <KeyBytes>::try_from(&encryption_key_bytes[0..32]).unwrap(), 
-            nonce: <NonceBytes>::try_from(&encryption_key_bytes[32..]).unwrap() 
+        Self {
+            key: <KeyBytes>::try_from(&encryption_key_bytes[0..32]).unwrap(),
+            nonce: <NonceBytes>::try_from(&encryption_key_bytes[32..]).unwrap(),
         }
     }
 
@@ -127,12 +131,11 @@ pub fn good_url(maybe_url: &str, prefix: &str) -> Result<url::Url, Error> {
                 error!("{}", error_message);
                 Err(Error::new(ErrorKind::InvalidInput, error_message))
             }
-        }
+        },
         false => {
             let error_message = format!("URL '{}' must start with '{}'", maybe_url, prefix);
             error!("{}", error_message);
             Err(Error::new(ErrorKind::InvalidInput, error_message))
         }
-    }    
+    }
 }
-

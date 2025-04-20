@@ -1,7 +1,6 @@
-/// "Pull-style" Reader for TCP
-
-use bytes::Bytes;
 use crate::datapipe_types::{InputReader, OutputWriter};
+/// "Pull-style" Reader for TCP
+use bytes::Bytes;
 use log::trace;
 use std::io::Error;
 use tokio::io::AsyncWriteExt;
