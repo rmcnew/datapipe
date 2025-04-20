@@ -1,42 +1,24 @@
 /// The main data read-write loop
 use crate::datapipe_types::{InputReader, OutputWriter};
 use crate::encryption::{StreamDecryptor, StreamEncryptor};
+use crate::parameters::Parameters;
 use crate::reader::Reader;
 use crate::writer::Writer;
 use log::{error, info, warn};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 const QUEUE_SIZE: usize = 2048;
 const RETRY_MAX: i32 = 5; // retry failed reads or writes up to this many consecutive times before stopping
 
-/// This struct gives all the parameters needed to start a datapipe instance
-pub struct Parameters {
-    pub reader: Reader,
-    pub maybe_decryptor: Option<StreamDecryptor>,
-    pub maybe_encryptor: Option<StreamEncryptor>,    
-    pub writers: Vec<Writer>,    
-}
-
-impl std::default::Default for Parameters {
-    fn default() -> Self {
-        Self {
-            reader: Reader::default(),
-            maybe_decryptor: None,
-            maybe_encryptor: None,
-            writers: vec![Writer::default()]
-        }
-    }
-}
-
-async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) {    
-    let mut read_retry_count = 0;            
+async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) {
+    let mut read_retry_count = 0;
     loop {
         match reader.read().await {
             Ok(buffer) => {
                 if buffer.is_empty() {
                     warn!("reader_child: no bytes read; stopping");
                     break;
-                } 
+                }
                 let v = buffer.to_vec();
                 match sender.send(v).await {
                     Ok(()) => {}
@@ -50,39 +32,43 @@ async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) {
             }
             Err(error) => {
                 read_retry_count += 1;
-                warn!("reader_child:  Error reading from input source: {error}; read_retry_count is {read_retry_count}");
+                warn!(
+                    "reader_child:  Error reading from input source: {error}; read_retry_count is {read_retry_count}"
+                );
                 if read_retry_count >= RETRY_MAX {
-                    let error_message = format!("reader_child:  RETRY_MAX {RETRY_MAX} reached; quitting due to repeated read errors");
+                    let error_message = format!(
+                        "reader_child:  RETRY_MAX {RETRY_MAX} reached; quitting due to repeated read errors"
+                    );
                     error!("{error_message}");
                     eprintln!("{error_message}");
                     break;
                 }
             }
         }
-    }    
+    }
 }
 
-async fn decryptor_child(mut receiver: Receiver<Vec<u8>>, mut decryptor: StreamDecryptor,  sender: Sender<Vec<u8>>) {
+async fn decryptor_child(
+    mut receiver: Receiver<Vec<u8>>,
+    mut decryptor: StreamDecryptor,
+    sender: Sender<Vec<u8>>,
+) {
     loop {
         match receiver.recv().await {
-            Some(bytes) => {
-                match decryptor.decrypt(&bytes) {
-                    Ok(plain) => {
-                        match sender.send(plain).await {
-                            Ok(()) => {}
-                            Err(_error) => {
-                                warn!("decryptor_child: cannot send to next stage; stopping");
-                                break;
-                            }
-                        }
+            Some(bytes) => match decryptor.decrypt(&bytes) {
+                Ok(plain) => match sender.send(plain).await {
+                    Ok(()) => {}
+                    Err(_error) => {
+                        warn!("decryptor_child: cannot send to next stage; stopping");
+                        break;
                     }
-                    Err(error) => {
-                        let error_message = format!("decryptor_child: error decrypting data: {error}");
-                        error!("{error_message}");
-                        eprintln!("{error_message}");
-                    }
+                },
+                Err(error) => {
+                    let error_message = format!("decryptor_child: error decrypting data: {error}");
+                    error!("{error_message}");
+                    eprintln!("{error_message}");
                 }
-            }
+            },
             None => {
                 warn!("decryptor_child: no bytes received; stopping");
                 break;
@@ -91,27 +77,27 @@ async fn decryptor_child(mut receiver: Receiver<Vec<u8>>, mut decryptor: StreamD
     }
 }
 
-async fn encryptor_child(mut receiver: Receiver<Vec<u8>>, mut encryptor: StreamEncryptor, sender: Sender<Vec<u8>>) {
+async fn encryptor_child(
+    mut receiver: Receiver<Vec<u8>>,
+    mut encryptor: StreamEncryptor,
+    sender: Sender<Vec<u8>>,
+) {
     loop {
         match receiver.recv().await {
-            Some(bytes) => {
-                match encryptor.encrypt(&bytes) {
-                    Ok(cipher) => {
-                        match sender.send(cipher).await {
-                            Ok(()) => {}
-                            Err(_error) => {
-                                warn!("encryptor_child: cannot send to next stage; stopping");
-                                break;
-                            }
-                        }
+            Some(bytes) => match encryptor.encrypt(&bytes) {
+                Ok(cipher) => match sender.send(cipher).await {
+                    Ok(()) => {}
+                    Err(_error) => {
+                        warn!("encryptor_child: cannot send to next stage; stopping");
+                        break;
                     }
-                    Err(error) => {
-                        let error_message = format!("encryptor_child: error encrypting data: {error}");
-                        error!("{error_message}");
-                        eprintln!("{error_message}");
-                    }
+                },
+                Err(error) => {
+                    let error_message = format!("encryptor_child: error encrypting data: {error}");
+                    error!("{error_message}");
+                    eprintln!("{error_message}");
                 }
-            }
+            },
             None => {
                 warn!("encryptor_child: no bytes received; stopping");
                 break;
@@ -120,22 +106,26 @@ async fn encryptor_child(mut receiver: Receiver<Vec<u8>>, mut encryptor: StreamE
     }
 }
 
-async fn writer_child(mut receiver: Receiver<Vec<u8>>, mut writers: Vec<Writer>) {    
-    let mut write_retry_count = 0;            
+async fn writer_child(mut receiver: Receiver<Vec<u8>>, mut writers: Vec<Writer>) {
+    let mut write_retry_count = 0;
     'writer: loop {
         match receiver.recv().await {
             Some(bytes) => {
                 for writer in &mut writers {
                     match writer.write(&bytes).await {
-                        Ok(()) => {                            
+                        Ok(()) => {
                             write_retry_count = 0;
                         }
                         Err(error) => {
                             // should the count be per output sink?
                             write_retry_count += 1;
-                            warn!("writer_child:  Error writing string to output: {error}; write_retry_count is {write_retry_count}");
+                            warn!(
+                                "writer_child:  Error writing string to output: {error}; write_retry_count is {write_retry_count}"
+                            );
                             if write_retry_count >= RETRY_MAX {
-                                let error_message = format!("writer_child: RETRY_MAX {RETRY_MAX} reached; quitting due to repeated write errors");
+                                let error_message = format!(
+                                    "writer_child: RETRY_MAX {RETRY_MAX} reached; quitting due to repeated write errors"
+                                );
                                 error!("{error_message}");
                                 eprintln!("{error_message}");
                                 break 'writer;
@@ -149,16 +139,21 @@ async fn writer_child(mut receiver: Receiver<Vec<u8>>, mut writers: Vec<Writer>)
                 break;
             }
         }
-    }    
+    }
 }
 
-pub async fn run_data_pipe(parameters: Parameters) {    
+pub async fn run_data_pipe(parameters: Parameters) {
     // vec to track child threads
-    let mut children = Vec::new();    
+    let mut children = Vec::new();
     // setup queue from reader thread to writer thread
     let (reader_sender, reader_receiver) = channel::<Vec<u8>>(QUEUE_SIZE);
 
-    let Parameters{reader, maybe_decryptor, maybe_encryptor, writers} = parameters;
+    let Parameters {
+        reader,
+        maybe_decryptor,
+        maybe_encryptor,
+        writers,
+    } = parameters;
 
     // spawn threads:
     // 1)  reader thread to get byte input and place in input queue
@@ -176,22 +171,34 @@ pub async fn run_data_pipe(parameters: Parameters) {
                     let (decryptor_sender, decryptor_receiver) = channel::<Vec<u8>>(QUEUE_SIZE);
                     let (encryptor_sender, encryptor_receiver) = channel::<Vec<u8>>(QUEUE_SIZE);
 
-                    let decryptor_handle = tokio::spawn(decryptor_child(reader_receiver, decryptor, decryptor_sender));
+                    let decryptor_handle = tokio::spawn(decryptor_child(
+                        reader_receiver,
+                        decryptor,
+                        decryptor_sender,
+                    ));
                     children.push(decryptor_handle);
 
-                    let encryptor_handle = tokio::spawn(encryptor_child(decryptor_receiver, encryptor, encryptor_sender));
+                    let encryptor_handle = tokio::spawn(encryptor_child(
+                        decryptor_receiver,
+                        encryptor,
+                        encryptor_sender,
+                    ));
                     children.push(encryptor_handle);
-                    
+
                     let writer_handle = tokio::spawn(writer_child(encryptor_receiver, writers));
                     children.push(writer_handle);
                 }
                 None => {
                     // decryptor only
                     let (decryptor_sender, decryptor_receiver) = channel::<Vec<u8>>(QUEUE_SIZE);
-                    
-                    let decryptor_handle = tokio::spawn(decryptor_child(reader_receiver, decryptor, decryptor_sender));
+
+                    let decryptor_handle = tokio::spawn(decryptor_child(
+                        reader_receiver,
+                        decryptor,
+                        decryptor_sender,
+                    ));
                     children.push(decryptor_handle);
-                    
+
                     let writer_handle = tokio::spawn(writer_child(decryptor_receiver, writers));
                     children.push(writer_handle);
                 }
@@ -200,17 +207,21 @@ pub async fn run_data_pipe(parameters: Parameters) {
         None => {
             match maybe_encryptor {
                 Some(encryptor) => {
-                    // encryptor only                    
+                    // encryptor only
                     let (encryptor_sender, encryptor_receiver) = channel::<Vec<u8>>(QUEUE_SIZE);
 
-                    let encryptor_handle = tokio::spawn(encryptor_child(reader_receiver, encryptor, encryptor_sender));
+                    let encryptor_handle = tokio::spawn(encryptor_child(
+                        reader_receiver,
+                        encryptor,
+                        encryptor_sender,
+                    ));
                     children.push(encryptor_handle);
-                    
+
                     let writer_handle = tokio::spawn(writer_child(encryptor_receiver, writers));
                     children.push(writer_handle);
                 }
                 None => {
-                    // neither decryptor nor encryptor                    
+                    // neither decryptor nor encryptor
                     let writer_handle = tokio::spawn(writer_child(reader_receiver, writers));
                     children.push(writer_handle);
                 }

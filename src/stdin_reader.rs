@@ -1,6 +1,6 @@
+use crate::datapipe_types::InputReader;
 /// Reader for STDIN
 use bytes::{Bytes, BytesMut};
-use crate::datapipe_types::InputReader;
 use std::io::Error;
 use tokio::io::AsyncReadExt;
 

@@ -39,4 +39,3 @@ impl std::default::Default for Writer {
         Self::Stdout(StdoutWriter::new())
     }
 }
-

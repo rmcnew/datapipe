@@ -1,5 +1,4 @@
 /// Writer for UDP output
-
 use crate::datapipe_types::OutputWriter;
 use log::{error, trace};
 use std::io::Error;

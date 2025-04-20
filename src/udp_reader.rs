@@ -1,7 +1,6 @@
-/// Reader for UDP
-
-use bytes::Bytes;
 use crate::datapipe_types::InputReader;
+/// Reader for UDP
+use bytes::Bytes;
 use log::trace;
 use std::io::Error;
 use std::net::Ipv4Addr;
@@ -29,7 +28,7 @@ impl UdpReader {
             Ok(socket) => {
                 socket.join_multicast_v4(addr, Ipv4Addr::UNSPECIFIED)?;
                 Ok(UdpReader { socket })
-            },
+            }
             Err(error) => Err(error),
         }
     }
@@ -42,8 +41,7 @@ impl InputReader for UdpReader {
             Ok((_length, _source_address)) => {
                 trace!(
                     "UdpReader received {} bytes from {}",
-                    _length,
-                    _source_address
+                    _length, _source_address
                 );
                 Ok(Bytes::from(vec_bytes))
             }

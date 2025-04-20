@@ -1,15 +1,15 @@
+use crate::datapipe_types::{InputReader, OutputWriter};
 /// Writer for TLS (TCP with TLS encryption)
 use bytes::Bytes;
-use crate::datapipe_types::{InputReader, OutputWriter};
 use log::{error, info};
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_rustls::client::TlsStream;
-use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::rustls::pki_types::ServerName;
 
 #[derive(Debug)]
 pub struct TlsReaderWriter {
@@ -28,7 +28,7 @@ impl TlsReaderWriter {
                 match ServerName::try_from(address_domain.to_owned()) {
                     // use the TlsConnector to "upgrade" the TCP stream to TLS
                     Ok(domain) => match tls_connector.connect(domain, tcp_stream).await {
-                        Ok(tls_stream) => Ok(Self{ tls_stream }),
+                        Ok(tls_stream) => Ok(Self { tls_stream }),
                         Err(error) => {
                             let error_message = format!("TLS connection error: {}", error);
                             error!("{}", error_message);
@@ -49,7 +49,7 @@ impl TlsReaderWriter {
                 error!("{}", error_message);
                 Err(Error::new(ErrorKind::NotConnected, error_message))
             }
-        }        
+        }
     }
 }
 

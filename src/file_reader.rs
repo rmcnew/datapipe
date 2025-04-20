@@ -1,10 +1,9 @@
-/// Reader for files
-
-use bytes::{Bytes, BytesMut};
 use crate::datapipe_types::InputReader;
+/// Reader for files
+use bytes::{Bytes, BytesMut};
 use log::trace;
-use std::path::Path;
 use std::io::{Error, SeekFrom};
+use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 #[derive(Debug)]
