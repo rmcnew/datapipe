@@ -163,7 +163,7 @@ Provide a 51-byte UTF-8 encryption key:
 
 Have `datapipe` generate a key:
 
-```datapipe --encrypt-generate-key``
+```datapipe --encrypt-generate-key```
 
 **Note that the generated encryption key will be printed on screen.**
 
