@@ -1,5 +1,5 @@
 /// The main data read-write loop
-use crate::datapipe_types::{InputReader, OutputWriter};
+use crate::datapipe_types::{error_root_cause, InputReader, OutputWriter};
 use crate::encryption::{StreamDecryptor, StreamEncryptor};
 use crate::parameters::Parameters;
 use crate::reader::Reader;
@@ -27,11 +27,10 @@ async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) {
                         break;
                     }
                 }
-                // reset retry count
-                read_retry_count = 0;
             }
             Err(error) => {
                 read_retry_count += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 warn!(
                     "reader_child:  Error reading from input source: {error}; read_retry_count is {read_retry_count}"
                 );
@@ -53,20 +52,25 @@ async fn decryptor_child(
     mut decryptor: StreamDecryptor,
     sender: Sender<Vec<u8>>,
 ) {
+    let mut buffer: Vec<u8> = Vec::new();
     loop {
         match receiver.recv().await {
-            Some(bytes) => match decryptor.decrypt(&bytes) {
-                Ok(plain) => match sender.send(plain).await {
-                    Ok(()) => {}
-                    Err(_error) => {
-                        warn!("decryptor_child: cannot send to next stage; stopping");
+            Some(bytes) => {
+                buffer.extend_from_slice(&bytes);
+                match decryptor.decrypt(&mut buffer) {
+                    Ok(plain) => match sender.send(plain).await {
+                        Ok(()) => {}
+                        Err(_error) => {
+                            warn!("decryptor_child: cannot send to next stage; stopping");
+                            break;
+                        }
+                    },
+                    Err(error) => {
+                        let error_message = format!("decryptor_child: error decrypting data: {}", error_root_cause(&error));
+                        error!("{error_message}");
+                        eprintln!("{error_message}");
                         break;
                     }
-                },
-                Err(error) => {
-                    let error_message = format!("decryptor_child: error decrypting data: {error}");
-                    error!("{error_message}");
-                    eprintln!("{error_message}");
                 }
             },
             None => {
@@ -82,20 +86,25 @@ async fn encryptor_child(
     mut encryptor: StreamEncryptor,
     sender: Sender<Vec<u8>>,
 ) {
+    let mut buffer: Vec<u8> = Vec::new();
     loop {
         match receiver.recv().await {
-            Some(bytes) => match encryptor.encrypt(&bytes) {
-                Ok(cipher) => match sender.send(cipher).await {
-                    Ok(()) => {}
-                    Err(_error) => {
-                        warn!("encryptor_child: cannot send to next stage; stopping");
+            Some(bytes) => {
+                buffer.extend_from_slice(&bytes);
+                match encryptor.encrypt(&mut buffer) {
+                    Ok(cipher) => match sender.send(cipher).await {
+                        Ok(()) => {}
+                        Err(_error) => {
+                            warn!("encryptor_child: cannot send to next stage; stopping");
+                            break;
+                        }
+                    },
+                    Err(error) => {
+                        let error_message = format!("encryptor_child: error encrypting data: {}", error_root_cause(&error));
+                        error!("{error_message}");
+                        eprintln!("{error_message}");
                         break;
                     }
-                },
-                Err(error) => {
-                    let error_message = format!("encryptor_child: error encrypting data: {error}");
-                    error!("{error_message}");
-                    eprintln!("{error_message}");
                 }
             },
             None => {
@@ -111,24 +120,25 @@ async fn writer_child(mut receiver: Receiver<Vec<u8>>, mut writers: Vec<Writer>)
     'writer: loop {
         match receiver.recv().await {
             Some(bytes) => {
-                for writer in &mut writers {
-                    match writer.write(&bytes).await {
-                        Ok(()) => {
-                            write_retry_count = 0;
-                        }
-                        Err(error) => {
-                            // should the count be per output sink?
-                            write_retry_count += 1;
-                            warn!(
-                                "writer_child:  Error writing string to output: {error}; write_retry_count is {write_retry_count}"
-                            );
-                            if write_retry_count >= RETRY_MAX {
-                                let error_message = format!(
-                                    "writer_child: RETRY_MAX {RETRY_MAX} reached; quitting due to repeated write errors"
-                                );
-                                error!("{error_message}");
-                                eprintln!("{error_message}");
-                                break 'writer;
+                if !bytes.is_empty() {
+                    for writer in &mut writers {
+                        match writer.write(&bytes).await {
+                            Ok(()) => {
+                                write_retry_count = 0;
+                            }
+                            Err(error) => {
+                                // should the count be per output sink?
+                                let error_cause = error_root_cause(&error);
+                                write_retry_count += 1;
+                                warn!("writer_child:  Error writing to output: {error_cause}; write_retry_count is {write_retry_count}");
+                                if write_retry_count >= RETRY_MAX {
+                                    let error_message = format!(
+                                        "writer_child: RETRY_MAX {RETRY_MAX} reached; quitting due to repeated write errors"
+                                    );
+                                    error!("{error_message}");
+                                    eprintln!("{error_message}");
+                                    break 'writer;
+                                }
                             }
                         }
                     }

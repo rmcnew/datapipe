@@ -20,7 +20,7 @@ const TRIGGER_FILE_SIZE: u64 = 20 * 1024 * 1024; // 2 MB
 const LOG_FILE_COUNT: u32 = 1;
 
 /// log entry pattern
-const LOG_ENTRY_PATTERN: &str = "{d(%Y-%m-%dT%H:%M:%S)} [{l}] {f}:{L} {m}\n";
+const LOG_ENTRY_PATTERN: &str = "{d} [{l}] {f}:{L} {m}\n";
 
 /// log level to use
 const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Info;

@@ -1,9 +1,10 @@
-use crate::datapipe_types::InputReader;
-/// "Listen for connection, then pull" Reader for TCP
+/// "Listen for connection, then receive" Reader for TCP
 use bytes::Bytes;
 use core::net::SocketAddr;
-use log::{error, trace};
+use crate::datapipe_types::InputReader;
+use log::{error, info};
 use std::io::{Error, ErrorKind};
+use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 
 const TCP_LISTEN_READ_BUFFER_SIZE: usize = 2048;
@@ -16,7 +17,7 @@ pub struct TcpListenReader {
 
 impl TcpListenReader {
     pub async fn new(address: &str) -> Result<Self, Error> {
-        trace!("TcpListenReader listening on {}", address);
+        info!("TcpListenReader listening on {}", address);
         match TcpListener::bind(address).await {
             Ok(tcp_listener) => Ok(Self {
                 tcp_listener,
@@ -34,9 +35,11 @@ impl TcpListenReader {
 impl InputReader for TcpListenReader {
     async fn read(&mut self) -> Result<Bytes, Error> {
         if self.maybe_tcp_stream.is_none() {
+            info!("Listening for connection");
             match self.tcp_listener.accept().await {
                 Ok((tcp_stream, addr)) => {
-                    trace!("Connection from {} accepted", addr);
+                    info!("Connection from {} accepted", addr);
+                    info!("TcpStream info: Local Addr:{:?}, Peer Addr:{:?}", tcp_stream.local_addr()?, tcp_stream.peer_addr()?);
                     self.maybe_tcp_stream = Some(tcp_stream);
                 }
                 Err(error) => {
@@ -46,24 +49,15 @@ impl InputReader for TcpListenReader {
                 }
             }
         }
-        match &self.maybe_tcp_stream {
-            Some(tcp_stream) => {
-                tcp_stream.readable().await?;
-                let mut vec_bytes = Vec::with_capacity(TCP_LISTEN_READ_BUFFER_SIZE);
-                match tcp_stream.try_read(&mut vec_bytes) {
-                    Ok(_length) => {
-                        trace!("TcpReader received {} bytes", _length);
-                        Ok(Bytes::from(vec_bytes))
-                    }
-                    Err(error) => Err(error),
-                }
+        let tcp_stream = self.maybe_tcp_stream.as_mut().unwrap();
+        let mut vec_bytes = [0; TCP_LISTEN_READ_BUFFER_SIZE];
+        info!("Attempting to read the stream");
+        match tcp_stream.read(&mut vec_bytes).await {
+            Ok(length) => {
+                info!("TcpListenReader received {} bytes", length);
+                Ok(Bytes::copy_from_slice(&vec_bytes[..length]))
             }
-            None => {
-                // this should not be possible
-                let error_message = format!("Error TcpStream initialization failure");
-                error!("{}", error_message);
-                return Err(Error::new(ErrorKind::NotConnected, error_message));
-            }
+            Err(error) => Err(error),
         }
     }
 }

@@ -10,6 +10,9 @@ use url::Url;
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum DatapipeError {
+    /// Configuration error
+    #[error("ConfigurationError: {0}")]
+    ConfigurationError(String),
     /// Input-Output error
     #[error("InputOutputError: {0}")]
     InputOutputError(String),
@@ -34,7 +37,13 @@ impl From<std::io::Error> for DatapipeError {
     }
 }
 
-// get the cause of an error
+impl From<std::env::VarError> for DatapipeError {
+    fn from(error: std::env::VarError) -> Self {
+        Self::ConfigurationError(format!("{error}"))
+    }
+}
+
+/// get the cause of an error
 pub fn error_root_cause(mut err: &(dyn std::error::Error + 'static)) -> String {
     use std::fmt::Write;
     let mut s = format!("{}", err);
@@ -57,15 +66,8 @@ pub trait OutputWriter {
     async fn write(&mut self, bytes: &[u8]) -> Result<(), Error>;
 }
 
-// type definitions
-// No types needed for stdin and stdout
-// Path and PathBuf for file reader and file writer
-// TCP, TLS, and UDP readers and writers use String or str with the tokio::net::ToSocketAddrs
-//    to handle DNS resolution
-// HTTP and HTTPS use url::Url
-
-// generate a String of the given length with pseudorandom content
-fn generate_random_string(len: usize) -> String {
+/// generate a String of the given length with pseudorandom content
+pub fn generate_random_string(len: usize) -> String {
     rng()
         .sample_iter(&Alphanumeric)
         .take(len)
@@ -74,8 +76,11 @@ fn generate_random_string(len: usize) -> String {
 }
 
 // typedefs for EncryptionKey fields
-type KeyBytes = [u8; 32];
-type NonceBytes = [u8; 19];
+const KEY_LENGTH: usize = 32;
+type KeyBytes = [u8; KEY_LENGTH];
+const NONCE_LENGTH: usize = 19;
+type NonceBytes = [u8; NONCE_LENGTH];
+const REQUIRED_LENGTH: usize = KEY_LENGTH + NONCE_LENGTH;
 
 /// Symmetric encryption key and nonce
 #[derive(Clone, Debug)]
@@ -85,14 +90,13 @@ pub struct EncryptionKey {
 }
 
 impl EncryptionKey {
-    const REQUIRED_LENGTH: usize = 51;
 
     /// create an EncryptionKey using the provided String; must be exactly 51 bytes
     pub fn new(encryption_key: &str) -> Result<Self, DatapipeError> {
-        if encryption_key.len() != Self::REQUIRED_LENGTH {
+        if encryption_key.len() != REQUIRED_LENGTH {
             let error_message = format!(
                 "Encryption key must be {} bytes long; provided encryption key is {} bytes long",
-                Self::REQUIRED_LENGTH,
+                REQUIRED_LENGTH,
                 encryption_key.len()
             );
             error!("{error_message}");
@@ -100,25 +104,25 @@ impl EncryptionKey {
         }
         let encryption_key_bytes = encryption_key.as_bytes();
         Ok(Self {
-            key: <KeyBytes>::try_from(&encryption_key_bytes[0..32]).unwrap(),
-            nonce: <NonceBytes>::try_from(&encryption_key_bytes[32..]).unwrap(),
+            key: <KeyBytes>::try_from(&encryption_key_bytes[0..KEY_LENGTH]).unwrap(),
+            nonce: <NonceBytes>::try_from(&encryption_key_bytes[KEY_LENGTH..]).unwrap(),
         })
     }
 
     pub fn generate() -> Self {
-        let encryption_key = generate_random_string(Self::REQUIRED_LENGTH);
+        let encryption_key = generate_random_string(REQUIRED_LENGTH);
         let encryption_key_bytes = encryption_key.into_bytes();
         Self {
-            key: <KeyBytes>::try_from(&encryption_key_bytes[0..32]).unwrap(),
-            nonce: <NonceBytes>::try_from(&encryption_key_bytes[32..]).unwrap(),
+            key: <KeyBytes>::try_from(&encryption_key_bytes[0..KEY_LENGTH]).unwrap(),
+            nonce: <NonceBytes>::try_from(&encryption_key_bytes[KEY_LENGTH..]).unwrap(),
         }
     }
 
     pub fn to_string(&self) -> String {
-        let mut bytes = Vec::new();
-        bytes.append(&mut self.key.as_slice().to_vec());
-        bytes.append(&mut self.nonce.as_slice().to_vec());
-        String::from_utf8(bytes).unwrap()
+        let mut bytes: [u8; REQUIRED_LENGTH] = [0; REQUIRED_LENGTH]; 
+        bytes[0..KEY_LENGTH].copy_from_slice(self.key.as_slice());
+        bytes[KEY_LENGTH..REQUIRED_LENGTH].copy_from_slice(self.nonce.as_slice());
+        String::from_utf8(bytes.to_vec()).unwrap()
     }
 }
 

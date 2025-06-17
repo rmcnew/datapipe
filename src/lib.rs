@@ -22,4 +22,5 @@ pub mod tcp_reader_writer;
 pub mod tls_reader_writer;
 pub mod udp_reader;
 pub mod udp_writer;
+pub mod utilities;
 pub mod writer;
