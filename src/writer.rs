@@ -8,7 +8,7 @@ use crate::tls_reader_writer::TlsReaderWriter;
 use crate::udp_writer::UdpWriter;
 use std::io::Error;
 
-// Combined writer
+/// Writer enum wraps all output implementations
 #[derive(Debug)]
 pub enum Writer {
     File(FileWriter),
@@ -20,6 +20,7 @@ pub enum Writer {
     Udp(UdpWriter),
 }
 
+/// Use the output implmentation's respective OutputWriter trait
 impl OutputWriter for Writer {
     async fn write(&mut self, bytes: &[u8]) -> Result<(), Error> {
         match self {
@@ -34,8 +35,58 @@ impl OutputWriter for Writer {
     }
 }
 
+/// The default Writer is STDOUT
 impl std::default::Default for Writer {
     fn default() -> Self {
         Self::Stdout(StdoutWriter::new())
+    }
+}
+
+/// Convert a FileWriter to a Writer
+impl std::convert::From<FileWriter> for Writer {
+    fn from(value: FileWriter) -> Self {
+        Self::File(value)
+    }
+}
+
+/// Convert an HttpWriter to a Writer
+impl std::convert::From<HttpWriter> for Writer {
+    fn from(value: HttpWriter) -> Self {
+        Self::Http(value)
+    }
+}
+
+/// Convert an HttpsWriter to a Writer
+impl std::convert::From<HttpsWriter> for Writer {
+    fn from(value: HttpsWriter) -> Self {
+        Self::Https(value)
+    }
+}
+
+/// Convert a StdoutWriter to a Writer
+impl std::convert::From<StdoutWriter> for Writer {
+    fn from(value: StdoutWriter) -> Self {
+        Self::Stdout(value)
+    }
+}
+
+/// Convert a TcpReaderWriter to a Writer
+impl std::convert::From<TcpReaderWriter> for Writer {
+    fn from(value: TcpReaderWriter) -> Self {
+        Self::Tcp(value)
+    }
+}
+
+/// Convert a TlsReaderWriter to a Writer
+impl std::convert::From<TlsReaderWriter> for Writer {
+    fn from(value: TlsReaderWriter) -> Self {
+        Self::Tls(value)
+    }
+}
+
+/// Convert a UdpWriter to a Writer
+impl std::convert::From<UdpWriter> for Writer {
+    fn from(value: UdpWriter) -> Self {
+        Self::Udp(value)
     }
 }

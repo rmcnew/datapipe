@@ -1,10 +1,11 @@
 /// This struct gives all the parameters needed to start a datapipe instance
-use crate::encryption::{StreamDecryptor, StreamEncryptor};
 use crate::datapipe_types::DatapipeError;
+use crate::encryption::{StreamDecryptor, StreamEncryptor};
 use crate::reader::Reader;
 use crate::writer::Writer;
 use log::error;
 
+/// Parameters needed to run datapipe
 pub struct Parameters {
     pub reader: Reader,
     pub maybe_decryptor: Option<StreamDecryptor>,
@@ -21,6 +22,18 @@ impl std::default::Default for Parameters {
             writers: vec![Writer::default()],
         }
     }
+}
+
+#[test]
+fn test_parameters_builder_build() {
+    use crate::stdin_reader::StdinReader;
+    use crate::stdout_writer::StdoutWriter;
+
+    let _parameters = ParametersBuilder::new()
+        .reader(Reader::from(StdinReader::new()))
+        .writer(Writer::from(StdoutWriter::new()))
+        .build()
+        .unwrap();
 }
 
 pub struct ParametersBuilder {
@@ -40,34 +53,36 @@ impl ParametersBuilder {
         }
     }
 
-    pub fn reader(&mut self, reader: Reader) -> &mut Self {
+    pub fn reader(mut self, reader: Reader) -> Self {
         self.maybe_reader = Some(reader);
         self
     }
 
-    pub fn decryptor(&mut self, decryptor: StreamDecryptor) -> &mut Self {
+    pub fn decryptor(mut self, decryptor: StreamDecryptor) -> Self {
         self.maybe_decryptor = Some(decryptor);
         self
     }
 
-    pub fn encryptor(&mut self, encryptor: StreamEncryptor) -> &mut Self {
+    pub fn encryptor(mut self, encryptor: StreamEncryptor) -> Self {
         self.maybe_encryptor = Some(encryptor);
         self
     }
 
-    pub fn writer(&mut self, writer: Writer) -> &mut Self {
+    pub fn writer(mut self, writer: Writer) -> Self {
         self.writers.push(writer);
         self
     }
 
     pub fn build(self) -> Result<Parameters, DatapipeError> {
         if self.maybe_reader.is_none() {
-            let error_message = format!("No input source!  Please configure a Reader to provide input."); 
+            let error_message =
+                format!("No input source!  Please configure a Reader to provide input.");
             error!("{error_message}");
             return Err(DatapipeError::ValidationError(error_message));
         }
         if self.writers.is_empty() {
-            let error_message = format!("No output destination!  Please configure a Writer for output."); 
+            let error_message =
+                format!("No output destination!  Please configure a Writer for output.");
             error!("{error_message}");
             return Err(DatapipeError::ValidationError(error_message));
         }

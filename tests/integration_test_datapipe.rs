@@ -78,6 +78,7 @@ async fn integration_test_uucp_file() {
 
     // "uucp" a file using two datapipe instances
     let port = get_unused_port().await.unwrap();
+    println!("uucp using port {port}");
     let tcp_address = format!("localhost:{}", port);
     let mut children = Vec::new();
     let args1: Vec<String> = vec![
@@ -85,14 +86,14 @@ async fn integration_test_uucp_file() {
         test_document_pathbuf.to_str().unwrap().to_string(),
         "--tcp-output".to_string(),
         tcp_address.clone(),
-        "--keep-logs".to_string(),
+        //"--keep-logs".to_string(),
     ];
     let args2 = vec![
         "--tcp-listen-input".to_string(),
         tcp_address.clone(),
         "--file-output".to_string(),
         output_file_path.to_str().unwrap().to_string(),
-        "--keep-logs".to_string(),
+        //"--keep-logs".to_string(),
     ];
     children.push(tokio::spawn(run_datapipe(args2)));
     children.push(tokio::spawn(run_datapipe(args1)));
@@ -128,6 +129,7 @@ async fn integration_test_scp_file() {
     let encryption_key_string = encryption_key.to_string();
     //println!("Encryption key is: {}; it has length {}", encryption_key_string, encryption_key_string.len());
     let port = get_unused_port().await.unwrap();
+    println!("scp using port {port}");
     let tcp_address = format!("localhost:{}", port);
     let mut children = Vec::new();
     let args1: Vec<String> = vec![
@@ -137,7 +139,7 @@ async fn integration_test_scp_file() {
         encryption_key_string.clone(),
         "--tcp-output".to_string(),
         tcp_address.clone(),
-        "--keep-logs".to_string(),
+        //"--keep-logs".to_string(),
     ];
     let args2 = vec![
         "--tcp-listen-input".to_string(),
@@ -146,7 +148,7 @@ async fn integration_test_scp_file() {
         encryption_key_string,
         "--file-output".to_string(),
         output_file_path.to_str().unwrap().to_string(),
-        "--keep-logs".to_string(),
+        //"--keep-logs".to_string(),
     ];
     children.push(tokio::spawn(run_datapipe(args2)));
     children.push(tokio::spawn(run_datapipe(args1)));
@@ -163,6 +165,6 @@ async fn integration_test_scp_file() {
     // compare the file contents
     assert!(identical_contents(&test_document_pathbuf, &output_file_path).await.unwrap());
     // delete the output file
-    //remove_file(&output_file_path).await.unwrap();    
+    remove_file(&output_file_path).await.unwrap();    
     
 }

@@ -1,8 +1,10 @@
 // various utilities
 use crate::datapipe_types::DatapipeError;
+use rand::distr::Uniform;
+use rand::{rng, Rng};
 use std::path::Path;
 use std::string::ToString;
-use tokio::net::UdpSocket;
+use tokio::net::TcpSocket;
 
 #[tokio::test]
 async fn test_get_unused_port() {
@@ -12,31 +14,48 @@ async fn test_get_unused_port() {
     //println!("Found available port: {}", _unused_port);
 }
 
-/// see if a port is in use
-pub async fn port_available(port: u16) -> bool {
-    let addr = format!("127.0.0.1:{}", port);
-    match UdpSocket::bind(addr).await {
-        Ok(socket) => match socket.local_addr() {
-            Ok(_address) => true,
-            Err(_error) => false,
-        },
-        Err(_error) => false,
+/// see if a port is in use; used in testing, so minimal error handling
+pub fn port_available(port: u16) -> bool {
+    let result: bool;
+    { // use an explicit scope so the socket is dropped
+        let addr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let socket = TcpSocket::new_v4().unwrap();
+        // set socket options so the port is available as soon as possible
+        socket.set_reuseaddr(true).unwrap();
+        socket.set_reuseport(true).unwrap();
+        socket.set_keepalive(false).unwrap();
+        socket.set_linger(None).unwrap();
+        match socket.bind(addr) {
+            Ok(()) => match socket.local_addr() {
+                Ok(_address) => {
+                    result = true;
+                }
+                Err(_error) => {
+                    result = false;
+                }
+            },
+            Err(_error) => {
+                result = false;
+            }
+        }
     }
+    result
 }
 
 const MAX_RETRY: u8 = 16;
-const PORT_SEARCH_START: u16 = 42_000;
-const PORT_SEARCH_END: u16 = 65_000; 
+const PORT_SEARCH_START: u16 = 24_000;
+const PORT_SEARCH_END: u16 = 64_000; 
 
 /// find an unused IP port
 pub async fn get_unused_port() -> Option<u16> {
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
-
-    let mut rng = StdRng::from_os_rng();
+    let range = Uniform::try_from(PORT_SEARCH_START..PORT_SEARCH_END).unwrap();
     for _ in 0..MAX_RETRY {
-        let port = rng.random_range(PORT_SEARCH_START..PORT_SEARCH_END);
-        if port_available(port).await {
+        let port = rng().sample(range);
+        if port_available(port) {
+            // short wait to allow port to be available; 
+            // on some systems, it takes a bit longer for the socket to be ready for use
+            // and trying to use it immediately gives a 'port already in use' error
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
             return Some(port);
         }
     }
@@ -45,8 +64,6 @@ pub async fn get_unused_port() -> Option<u16> {
 
 /// sleep for a randomized amount up to 'max_delay_in_seconds' before continuing
 pub async fn start_after_random_delay(max_delay_in_seconds: u8) {
-    use rand::distr::Uniform;
-    use rand::{rng, Rng};
     let range = Uniform::try_from(1..max_delay_in_seconds).unwrap();
     let delay = rng().sample(range);
     tokio::time::sleep(std::time::Duration::from_secs(delay.into())).await;

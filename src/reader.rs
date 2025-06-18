@@ -10,7 +10,7 @@ use crate::udp_reader::UdpReader;
 use bytes::Bytes;
 use std::io::Error;
 
-/// Reader enum holds all input implementations
+/// Reader enum wraps all input implementations
 #[derive(Debug)]
 pub enum Reader {
     File(FileReader),
@@ -23,7 +23,7 @@ pub enum Reader {
     Udp(UdpReader),
 }
 
-/// Use the input implementation's respective Reader trait
+/// Use the input implementation's respective InputReader trait
 impl InputReader for Reader {
     async fn read(&mut self) -> Result<Bytes, Error> {
         match self {
@@ -39,8 +39,65 @@ impl InputReader for Reader {
     }
 }
 
+/// The default Reader is for STDIN
 impl std::default::Default for Reader {
     fn default() -> Self {
         Self::Stdin(StdinReader::new())
+    }
+}
+
+/// Convert a FileReader to a Reader
+impl std::convert::From<FileReader> for Reader {
+    fn from(value: FileReader) -> Self {
+        Self::File(value)
+    }
+}
+
+/// Convert an HttpReader to a Reader
+impl std::convert::From<HttpReader> for Reader {
+    fn from(value: HttpReader) -> Self {
+        Self::Http(value)
+    }
+}
+
+/// Convert an HttpsReader to a Reader
+impl std::convert::From<HttpsReader> for Reader {
+    fn from(value: HttpsReader) -> Self {
+        Self::Https(value)
+    }
+}
+
+/// Convert a StdinReader to a Reader
+impl std::convert::From<StdinReader> for Reader {
+    fn from(value: StdinReader) -> Self {
+        Self::Stdin(value)
+    }
+}
+
+/// Convert a TcpReaderWriter to a Reader
+impl std::convert::From<TcpReaderWriter> for Reader {
+    fn from(value: TcpReaderWriter) -> Self {
+        Self::Tcp(value)
+    }
+}
+
+/// Convert a TcpListenReader to a Reader
+impl std::convert::From<TcpListenReader> for Reader {
+    fn from(value: TcpListenReader) -> Self {
+        Self::TcpListen(value)
+    }
+}
+
+/// Convert a TlsReaderWriter to a Reader
+impl std::convert::From<TlsReaderWriter> for Reader {
+    fn from(value: TlsReaderWriter) -> Self {
+        Self::Tls(value)
+    }
+}
+
+/// Convert a UdpReader to a Reader
+impl std::convert::From<UdpReader> for Reader {
+    fn from(value: UdpReader) -> Self {
+        Self::Udp(value)
     }
 }
