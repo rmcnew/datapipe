@@ -43,6 +43,18 @@ impl From<std::env::VarError> for DatapipeError {
     }
 }
 
+impl From<rustls::Error> for DatapipeError {
+    fn from(error: rustls::Error) -> Self {
+        Self::ConfigurationError(format!("{error}"))
+    }
+}
+
+impl From<rustls::client::VerifierBuilderError> for DatapipeError {
+    fn from(error: rustls::client::VerifierBuilderError) -> Self {
+        Self::ConfigurationError(format!("{error}"))
+    }
+}
+
 /// get the cause of an error
 pub fn error_root_cause(mut err: &(dyn std::error::Error + 'static)) -> String {
     use std::fmt::Write;

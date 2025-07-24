@@ -5,6 +5,7 @@ use crate::https_reader::HttpsReader;
 use crate::stdin_reader::StdinReader;
 use crate::tcp_listen_reader::TcpListenReader;
 use crate::tcp_reader_writer::TcpReaderWriter;
+use crate::tls_listen_reader::TlsListenReader;
 use crate::tls_reader_writer::TlsReaderWriter;
 use crate::udp_reader::UdpReader;
 use bytes::Bytes;
@@ -20,6 +21,7 @@ pub enum Reader {
     Tcp(TcpReaderWriter),
     TcpListen(TcpListenReader),
     Tls(TlsReaderWriter),
+    TlsListen(TlsListenReader),
     Udp(UdpReader),
 }
 
@@ -34,6 +36,7 @@ impl InputReader for Reader {
             Self::Tcp(tcp_reader) => tcp_reader.read().await,
             Self::TcpListen(tcp_listen_reader) => tcp_listen_reader.read().await,
             Self::Tls(tls_reader) => tls_reader.read().await,
+            Self::TlsListen(tls_listen_reader) => tls_listen_reader.read().await,
             Self::Udp(udp_reader) => udp_reader.read().await,
         }
     }
@@ -94,6 +97,14 @@ impl std::convert::From<TlsReaderWriter> for Reader {
         Self::Tls(value)
     }
 }
+
+/// Convert a TlsListenReader to a Reader
+impl std::convert::From<TlsListenReader> for Reader {
+    fn from(value: TlsListenReader) -> Self {
+        Self::TlsListen(value)
+    }
+}
+
 
 /// Convert a UdpReader to a Reader
 impl std::convert::From<UdpReader> for Reader {

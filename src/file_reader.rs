@@ -1,6 +1,6 @@
-use crate::datapipe_types::InputReader;
 /// Reader for files
 use bytes::{Bytes, BytesMut};
+use crate::datapipe_types::InputReader;
 use log::trace;
 use std::io::{Error, SeekFrom};
 use std::path::Path;

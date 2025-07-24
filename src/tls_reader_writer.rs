@@ -1,6 +1,6 @@
-use crate::datapipe_types::{InputReader, OutputWriter};
-/// Writer for TLS (TCP with TLS encryption)
+/// Reader and Writer for TLS (TCP with TLS encryption)
 use bytes::Bytes;
+use crate::datapipe_types::{InputReader, OutputWriter};
 use log::{error, info};
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
@@ -11,17 +11,19 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::rustls::pki_types::ServerName;
 
+const TLS_READER_WRITER_BUFFER_SIZE: usize = 2048;
+
 #[derive(Debug)]
 pub struct TlsReaderWriter {
     tls_stream: TlsStream<TcpStream>,
 }
 
 impl TlsReaderWriter {
-    pub async fn new(address: String, tls_config: ClientConfig) -> Result<Self, Error> {
+    pub async fn new(address: &str, tls_config: ClientConfig) -> Result<Self, Error> {
         let tls_connector = TlsConnector::from(Arc::new(tls_config));
         // connect a "basic" TCP stream
-        info!("Connecting to TCP address: {}", &address);
-        match TcpStream::connect(&address).await {
+        info!("Connecting to TCP address: {}", address);
+        match TcpStream::connect(address).await {
             Ok(tcp_stream) => {
                 // get the domain name
                 let address_domain = get_domain(&address);
@@ -55,7 +57,7 @@ impl TlsReaderWriter {
 
 impl InputReader for TlsReaderWriter {
     async fn read(&mut self) -> Result<bytes::Bytes, Error> {
-        let mut vec_bytes = Vec::with_capacity(512);
+        let mut vec_bytes = Vec::with_capacity(TLS_READER_WRITER_BUFFER_SIZE);
         self.tls_stream.read(&mut vec_bytes).await?;
         Ok(Bytes::from(vec_bytes))
     }

@@ -19,6 +19,7 @@ clap = { version = "4.5.21", features = ["derive"] }
 log = { version = "0.4.22", features = ["serde"] }
 log4rs = "1.3.0"
 rand = "0.9.0"
+rcgen = { version = "0.13.2", features = ["crypto", "pem"] }
 reqwest = { version = "0.12.9", features = ["charset", "gzip", "http2", "json", "rustls-tls"], default-features = false }
 rustls = { version = "0.23.25", features = ["ring", "logging", "std", "tls12"], default-features = false }
 rustls-pemfile = "2.2.0"

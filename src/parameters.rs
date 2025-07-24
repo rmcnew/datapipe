@@ -36,6 +36,7 @@ fn test_parameters_builder_build() {
         .unwrap();
 }
 
+/// Builder for Parameters
 pub struct ParametersBuilder {
     maybe_reader: Option<Reader>,
     maybe_decryptor: Option<StreamDecryptor>,

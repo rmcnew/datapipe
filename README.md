@@ -5,6 +5,11 @@ datapipe is a tool used to stream data from one place to another across a variet
 
 A datapipe is configured by selecting one input and one or more outputs.  Data streams from the input to the output(s) until no more input is available.
 
+# Navigation
+1. [Input Protocols](#input-protocols)
+2. [Output Protocols](#output-protocols)
+3. [In Transit Options](#in-transit-options)
+
 ## Input protocols
 * [FILE](#file-input) - read data from a file
 * [HTTP](#http-input) - read data from an HTTP URL
@@ -13,6 +18,7 @@ A datapipe is configured by selecting one input and one or more outputs.  Data s
 * [TCP](#tcp-input) - read data from a TCP address and port
 * [TCP Listen](#tcp-listen-input) - open a local port to listen and receive data using a TCP connection
 * [TLS](#tls-input) - read data securely from a TLS address and port
+* [TLS Listen](#tls-listen-input) - open a local port to listen and receive data using a TLS connection
 * [UDP](#udp-input) - read data from a UDP address and port
 * [UDP Multicast](#udp-multicast-input) - read data from a UDP multicast address and port
 
@@ -66,6 +72,19 @@ A custom certificate chain (`--tls-input-cert-chain`) can be specified if needed
 TLS input uses web Certificate Authority roots by default.  A custom Certificate Authority root can be used (`--tls-input-root-ca`) if wanted.  The certificate must be in DER format.
 
 In rare circumstances, TLS server verification can be skpped (`--tls-input-skip-server-verify`). DANGER! This should only be used for testing in controlled environments.  Misuse can allow an attacker to pretend to be the source server.
+
+### TLS Listen Input
+TLS Listen input opens a TLS port on the local machine to listen and accept a TLS connection.
+
+```datapipe --tls-listen-input localhost:9191 --tls-listen-input-cert-chain certificates.der --tls-listen-input-server-key key.der```
+
+A custom certificate chain (`--tls-listen-input-cert-chain`) must be specified along with a custom server private key (`--tls-listen-input-server-key`) to prove server identity.  The certificate chain must be in DER format.  Private key must be DER-encoded PKCS#1, PKCS#8, or SEC1.
+
+Default behavior is to verify client identity against the certificate chain.  In rare circumstances, TLS client verification can be skipped (`--tls-listen-input-skip-client-verify`). DANGER! This should only be used for testing in controlled environments.  Misuse can allow an attacker to pretend to be an authorized client.
+
+For convenience in testing environments, a self-signed server certificate and private key can be generated and used (`--tls-listen-input-generate-self-signed`).  DANGER! This should only be used for testing in controlled environments.  Generating a self-signed certificate and private key mean that clients will not be able to verify the server's identity.  This implies 'skip-client-verify' since certificates presented by the client will not be in the generated self-signed certificate chain.
+
+```datapipe --tls-listen-input localhost:9292 --tls-listen-input-generate-self-signed```
 
 ### UDP Input
 UDP input reads data from a UDP address and port.
@@ -149,10 +168,10 @@ UDP output writes data to a UDP address and port.
 
 
 ## In-Transit Options
-### Encryption Options
-In-line streaming encryption and decryption can provide additional security.  
+### Encryption
+In-line streaming encryption and decryption can provide additional security.  NOTE: for optimal data security, encrypt your data with another encryption system before using `datapipe`.  Then, use datapipe's stream encryption over TLS to send your data.  This will provide three layers of encryption which should help to deter most attackers.
 
-The current streaming encryption requires a symmetric key that is exactly 51 bytes in length and is valid UTF-8.  This allows the key to easily be copied or written down for later use or out-of-band transmission to a receiving party.  
+The current streaming encryption requires a symmetric key that is exactly 51 bytes in length and is valid UTF-8.  This allows the key to easily be copied or written down for later use and out-of-band transmission to a receiving party.  
 
 The 51-byte UTF-8 key can be provided or automatically generated.
 
@@ -173,8 +192,6 @@ Provide the 51-byte UTF-8 encryption key used during encryption:
 ```datapipe --decrypt T8BRXrN15Xpz0KE2FjiZEYGmPk4IpHQmweh2DXERhx7vU6OIEJx```
 
 # Production Readiness
-datapipe is currently at **early alpha maturity and should not be used for production work.**
+`datapipe` is currently at **alpha maturity and should not be used for production work.**
 
-Work is underway to build a comprehensive testing suite to find and fix bugs and unexpected behavior.
 
-crates.io:  https://crates.io/crates/datapipe

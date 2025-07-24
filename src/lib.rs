@@ -1,6 +1,5 @@
-//! # datapipe - stream data from here to there
-//!
-//! datapipe is a tool used to stream data from one place to another across a variety of protocols.
+// Use the README.md for top-level documentation
+#![doc = include_str!("../README.md")]
 
 pub mod args;
 pub mod datapipe_types;
@@ -19,6 +18,7 @@ pub mod stdin_reader;
 pub mod stdout_writer;
 pub mod tcp_listen_reader;
 pub mod tcp_reader_writer;
+pub mod tls_listen_reader;
 pub mod tls_reader_writer;
 pub mod udp_reader;
 pub mod udp_writer;

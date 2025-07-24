@@ -12,27 +12,32 @@ use crate::stdin_reader::StdinReader;
 use crate::stdout_writer::StdoutWriter;
 use crate::tcp_listen_reader::TcpListenReader;
 use crate::tcp_reader_writer::TcpReaderWriter;
+use crate::tls_listen_reader::TlsListenReader;
 use crate::tls_reader_writer::TlsReaderWriter;
 use crate::udp_reader::UdpReader;
 use crate::udp_writer::UdpWriter;
 use crate::writer::Writer;
 use clap::{Args, Parser};
 use log::{error, info};
+use rcgen::{generate_simple_self_signed, CertifiedKey};
 use reqwest::{Certificate, Identity, tls::CertificateRevocationList};
+use rustls::pki_types::pem::PemObject;
 use rustls_pemfile::{certs, private_key};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_rustls::rustls::{
+    ClientConfig, ServerConfig, ConfigBuilder, DigitallySignedStruct, RootCertStore, SignatureScheme,
+};
 use tokio_rustls::rustls::client::WantsClientCert;
 use tokio_rustls::rustls::client::danger::{
     HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
 };
+use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
-use tokio_rustls::rustls::{
-    ClientConfig, ConfigBuilder, DigitallySignedStruct, RootCertStore, SignatureScheme,
-};
+use tokio_rustls::rustls::pki_types::pem::SectionKind;
 use webpki_roots::TLS_SERVER_ROOTS;
 
 /// Choose one input source
@@ -60,6 +65,10 @@ pub struct InputArgs {
     /// read data from a TLS address; may need to configure server and client certificates
     #[arg(long = "tls-input")]
     pub tls_input: Option<String>,
+    /// open a local port to listen and receive data using a TLS connection; may need to configure
+    /// server certificates
+    #[arg(long = "tls-listen-input")]
+    pub tls_listen_input: Option<String>,
     /// read data from a UDP address
     #[arg(long = "udp-input")]
     pub udp_input: Option<String>,
@@ -108,7 +117,7 @@ pub struct TlsInputArgs {
     /// path to custom TLS certificate chain file to use.  Certificates must be in DER format.
     #[arg(long = "tls-input-cert-chain")]
     pub tls_input_cert_chain: Option<PathBuf>,
-    /// path to custom TLS client certificate to use.  Private key must be DER-encoded PKCS#1, PKCS#8, or SEC1.
+    /// path to custom TLS client key to use.  Private key must be DER-encoded PKCS#1, PKCS#8, or SEC1.
     #[arg(long = "tls-input-client-key")]
     pub tls_input_client_key: Option<PathBuf>,
     /// path to custom Certificate Authority to use instead of web root CAs
@@ -117,6 +126,24 @@ pub struct TlsInputArgs {
     /// DANGER! Do not validate server identity.  Use with caution. DANGER!
     #[arg(long = "tls-input-skip-server-verify", default_value_t = false)]
     pub tls_input_skip_server_verify: bool,
+}
+
+/// Additional parameters needed for TLS listen input
+#[derive(Args, Debug, Clone)]
+#[group(required = false, multiple = true)]
+pub struct TlsListenInputArgs {
+    /// path to custom TLS certificate chain file to use.  Certificates must be in DER format.
+    #[arg(long = "tls-listen-input-cert-chain")]
+    pub tls_listen_input_cert_chain: Option<PathBuf>,
+    /// path to custom TLS server key to use.  Private key must be DER-encoded PKCS#1, PKCS#8, or SEC1.
+    #[arg(long = "tls-listen-input-server-key")]
+    pub tls_listen_input_server_key: Option<PathBuf>,
+    /// DANGER! Do not validate client identity.  Use with caution. DANGER!
+    #[arg(long = "tls-listen-input-skip-client-verify", default_value_t = false)]
+    pub tls_listen_input_skip_client_verify: bool,
+    /// Instead of providing a certificate chain and private key, generate a self-signed certificate and private key 
+    #[arg(long = "tls-listen-input-generate-self-signed", default_value_t = false)]
+    pub tls_listen_input_generate_self_signed: bool,
 }
 
 /// Additional parameters for decrypting input
@@ -253,6 +280,8 @@ pub struct ProgramArgs {
     pub https_input: HttpsInputArgs,
     #[command(flatten)]
     pub tls_input: TlsInputArgs,
+    #[command(flatten)]
+    pub tls_listen_input: TlsListenInputArgs,
     #[command(flatten)]
     pub decryption_args: DecryptionArgs,
     #[command(flatten)]
@@ -468,7 +497,7 @@ impl ProgramArgs {
     async fn handle_tls_input(&self) -> Result<Reader, DatapipeError> {
         let address = self.input.tls_input.as_ref().unwrap();
         match self.get_tls_input_config() {
-            Ok(tls_config) => match TlsReaderWriter::new(address.to_owned(), tls_config).await {
+            Ok(tls_config) => match TlsReaderWriter::new(address, tls_config).await {
                 Ok(tls_reader) => {
                     info!("Using TLS input");
                     Ok(Reader::Tls(tls_reader))
@@ -488,14 +517,11 @@ impl ProgramArgs {
         }
     }
 
-    fn get_tls_input_config(&self) -> Result<ClientConfig, DatapipeError> {
+    fn setup_root_cert_store(&self) -> Result<RootCertStore, DatapipeError> {
         // setup root cert store
         let mut root_cert_store = RootCertStore::empty();
         if self.tls_input.tls_input_root_ca.is_some() {
-            match get_root_ca(
-                self.tls_input.tls_input_root_ca.as_ref().unwrap(),
-                &mut root_cert_store,
-            ) {
+            match get_root_ca(self.tls_input.tls_input_root_ca.as_ref().unwrap(), &mut root_cert_store,) {
                 Ok(()) => {} // no issues loading CA roots
                 Err(error) => {
                     let error_message = format!(
@@ -509,75 +535,35 @@ impl ProgramArgs {
         } else {
             root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
         }
-        // begin build the config
+        Ok(root_cert_store)
+    }
+
+    fn get_tls_input_client_config_builder(&self) -> Result<ConfigBuilder<ClientConfig, WantsClientCert>, DatapipeError> {
         // check if no verification was requested
-        let config: ConfigBuilder<ClientConfig, WantsClientCert> =
-            if self.tls_input.tls_input_skip_server_verify {
-                let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
-                dangerous_config
-                    .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new()))
-            } else {
-                ClientConfig::builder().with_root_certificates(root_cert_store)
-            };
-        // see if client auth is needed
+        if self.tls_input.tls_input_skip_server_verify {
+            let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
+            return Ok(dangerous_config.with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new())));
+        } else {
+            let root_cert_store = self.setup_root_cert_store()?;
+            return Ok(ClientConfig::builder().with_root_certificates(root_cert_store));
+        }
+    }
+
+    // TLS input-specific wrapper for get_tls_cert_chain
+    fn get_tls_input_certificate_chain(&self) -> Result<Option<Vec<CertificateDer<'static>>>, DatapipeError> {
         match self.tls_input.tls_input_cert_chain.as_ref() {
             Some(tls_cert_chain_path) => {
                 // get certificate chain
                 match get_tls_cert_chain(tls_cert_chain_path) {
                     Ok(cert_chain) => {
-                        // get client certificate
-                        match self.tls_input.tls_input_client_key.as_ref() {
-                            Some(tls_client_key_path) => {
-                                match get_tls_client_key(tls_client_key_path) {
-                                    Ok(client_key) => {
-                                        // finish building the config with cert chain and client key
-                                        match config.with_client_auth_cert(cert_chain, client_key) {
-                                            Ok(tls_config) => {
-                                                return Ok(tls_config);
-                                            }
-                                            Err(error) => {
-                                                let error_message = format!(
-                                                    "Error creating TLS input config with cert chain and client key: {}",
-                                                    error_root_cause(&error)
-                                                );
-                                                error!("{error_message}");
-                                                return Err(DatapipeError::InputOutputError(
-                                                    error_message,
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    Err(error) => {
-                                        // failed to get client key
-                                        let error_message = format!(
-                                            "Error getting TLS input client key {:?}: {}",
-                                            tls_client_key_path,
-                                            error_root_cause(&error)
-                                        );
-                                        error!("{error_message}");
-                                        return Err(DatapipeError::InputOutputError(error_message));
-                                    }
-                                }
-                            }
-                            None => {
-                                // the user should have provided a client key too
-                                let error_message = "TLS input certificate chain (--tls-input-cert-chain) requires client key (--tls-input-client-key) to also be used";
-                                error!("{error_message}");
-                                return Err(DatapipeError::ValidationError(
-                                    error_message.to_string(),
-                                ));
-                            }
-                        }
+                        info!("Success getting TLS input certificate chain");
+                        Ok(Some(cert_chain))
                     }
                     Err(error) => {
                         // failed to get cert chain
-                        let error_message = format!(
-                            "Error getting TLS input certificate chain {:?}: {}",
-                            tls_cert_chain_path,
-                            error_root_cause(&error)
-                        );
+                        let error_message = format!("Error getting TLS input certificate chain {:?}: {}", tls_cert_chain_path, error_root_cause(&error));
                         error!("{error_message}");
-                        return Err(DatapipeError::InputOutputError(error_message));
+                        Err(DatapipeError::InputOutputError(error_message))
                     }
                 }
             }
@@ -589,8 +575,199 @@ impl ProgramArgs {
                     error!("{error_message}");
                     return Err(DatapipeError::ValidationError(error_message.to_string()));
                 }
-                // finishing build the config with no client authentication
-                return Ok(config.with_no_client_auth());
+                info!("No TLS certificate chain provided");
+                Ok(None)
+            }
+        }
+    }
+
+    // TLS input-specific wrapper for get_tls_private_key
+    fn get_tls_input_client_key(&self) -> Result<Option<PrivateKeyDer<'static>>, DatapipeError> {
+        match self.tls_input.tls_input_client_key.as_ref() {
+            Some(tls_client_key_path) => {
+                match get_tls_private_key(tls_client_key_path) {
+                    Ok(client_key) => {
+                        info!("Success getting TLS input client key");
+                        Ok(Some(client_key))
+                    }
+                    Err(error) => {
+                        // failed to get client key
+                        let error_message = format!("Error getting TLS input client key {:?}: {}", tls_client_key_path, error_root_cause(&error));
+                        error!("{error_message}");
+                        Err(DatapipeError::InputOutputError(error_message))
+                    }
+                }
+            }
+            None => {
+                // make sure the user did not give a certificate chain too
+                if self.tls_input.tls_input_cert_chain.is_some() {
+                    let error_message = "TLS input certificate chain (--tls-input-cert-chain) requires client key (--tls-input-client-key) to also be used";
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError( error_message.to_string()));
+                }
+                info!("No TLS input client key provided");
+                Ok(None)
+            }
+        }
+    }
+
+    fn get_tls_input_config(&self) -> Result<ClientConfig, DatapipeError> {
+        let config_builder = self.get_tls_input_client_config_builder()?;
+        let maybe_cert_chain = self.get_tls_input_certificate_chain()?;
+        let maybe_client_key = self.get_tls_input_client_key()?;
+        // both get_tls_input_certificate_chain and get_tls_input_client_key 
+        // check to make sure if one is present the other is also present
+        if maybe_cert_chain.is_some() && maybe_client_key.is_some() {
+            // finish building the config with cert chain and client key
+            let cert_chain = maybe_cert_chain.unwrap();
+            let client_key = maybe_client_key.unwrap();
+            match config_builder.with_client_auth_cert(cert_chain, client_key) {
+                Ok(tls_config) => {
+                    return Ok(tls_config);
+                }
+                Err(error) => {
+                    let error_message = format!("Error creating TLS input config with cert chain and client key: {}", error_root_cause(&error));
+                    error!("{error_message}");
+                    return Err(DatapipeError::InputOutputError(error_message));
+                }
+            }
+        } else {
+            // finishing build the config with no client authentication
+            return Ok(config_builder.with_no_client_auth());
+        }
+    }
+
+    // TLS listen input-specific wrapper for get_tls_cert_chain
+    fn get_tls_listen_input_certificate_chain(&self) -> Result<Option<Vec<CertificateDer<'static>>>, DatapipeError> {
+        match self.tls_listen_input.tls_listen_input_cert_chain.as_ref() {
+            Some(tls_cert_chain_path) => {
+                // get certificate chain
+                match get_tls_cert_chain(tls_cert_chain_path) {
+                    Ok(cert_chain) => {
+                        info!("Success getting TLS listen input certificate chain");
+                        Ok(Some(cert_chain))
+                    }
+                    Err(error) => {
+                        // failed to get cert chain
+                        let error_message = format!("Error getting TLS listen input certificate chain {:?}: {}", tls_cert_chain_path, error_root_cause(&error));
+                        error!("{error_message}");
+                        Err(DatapipeError::InputOutputError(error_message))
+                    }
+                }
+            }
+            None => {
+                // TLS listen input requires a server cert chain and private key
+                // if a cert chain is not provided, and it is not being generated, it is an error
+                if !self.tls_listen_input.tls_listen_input_generate_self_signed {
+                    let error_message = "TLS listen input requires certificate chain to be provided (--tls-listen-input-cert-chain) or generated (--tls-listen-input-generate-self-signed)";
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError(error_message.to_string()));
+                }
+                info!("No TLS certificate chain provided");
+                Ok(None)
+            }
+        }
+    }
+
+    // TLS input-specific wrapper for get_tls_private_key
+    fn get_tls_listen_input_server_key(&self) -> Result<Option<PrivateKeyDer<'static>>, DatapipeError> {
+        match self.tls_listen_input.tls_listen_input_server_key.as_ref() {
+            Some(tls_server_key_path) => {
+                match get_tls_private_key(tls_server_key_path) {
+                    Ok(server_key) => {
+                        info!("Success getting TLS listen input server key");
+                        Ok(Some(server_key))
+                    }
+                    Err(error) => {
+                        // failed to get server key
+                        let error_message = format!("Error getting TLS listen input server key {:?}: {}", tls_server_key_path, error_root_cause(&error));
+                        error!("{error_message}");
+                        Err(DatapipeError::InputOutputError(error_message))
+                    }
+                }
+            }
+            None => {
+                // TLS listen input requires a server cert chain and private key
+                // if a server private key is not provided, and it is not being generated, it is an error
+                if !self.tls_listen_input.tls_listen_input_generate_self_signed {
+                    let error_message = "TLS listen input requires server private key to be provided (--tls-listen-input-server-key) or generated (--tls-listen-input-generate-self-signed)";
+                    error!("{error_message}");
+                    return Err(DatapipeError::ConfigurationError(error_message.to_string()));
+                }
+                info!("No TLS listen input server key provided");
+                Ok(None)
+            }
+        }
+    }
+
+    fn generate_self_signed(&self) -> Result<CertifiedKey, DatapipeError> {
+        let hostname = crate::utilities::hostname();
+        let subject_alt_names = vec![hostname, "localhost".to_string()];
+        match generate_simple_self_signed(subject_alt_names) {
+            Ok(certified_key) => Ok(certified_key),
+            Err(error) => {
+                let error_message = format!("Error generating self-signed certificate: {error}");
+                error!("{error_message}");
+                return Err(DatapipeError::ConfigurationError(error_message));
+            }
+        }
+    }
+
+    fn get_tls_listen_input_config(&self) -> Result<ServerConfig, DatapipeError> {
+        let maybe_cert_chain = self.get_tls_listen_input_certificate_chain()?;
+        let maybe_server_key = self.get_tls_listen_input_server_key()?;
+        let mut cert_chain: Vec<CertificateDer>;
+        let server_key: PrivateKeyDer;
+		let server_config: ServerConfig;
+        if maybe_cert_chain.is_none() && maybe_server_key.is_none() {
+            // generate a self-signed cert and keys
+            let CertifiedKey { cert, key_pair } = self.generate_self_signed()?;
+            cert_chain = Vec::new();
+            cert_chain.push(cert.der().clone());
+            match PrivateKeyDer::from_pem(SectionKind::PrivateKey, key_pair.serialize_pem().into_bytes()) {
+                Some(private_key) => {
+                    server_key = private_key;
+                }
+                None => {
+                    let error_message = "Error generating self-signed certificate: Could not convert generated private key to needed format!";
+                    error!("{error_message}");
+                    return Err(DatapipeError::ConfigurationError(error_message.to_string()));
+                }
+            }
+        } else {
+            cert_chain = maybe_cert_chain.unwrap();
+            server_key = maybe_server_key.unwrap();
+        }
+        if self.tls_listen_input.tls_listen_input_skip_client_verify {
+            server_config = ServerConfig::builder().with_no_client_auth().with_single_cert(cert_chain, server_key)?;
+        } else {
+			let mut roots = RootCertStore::empty();
+			let (_certs_added_count, _certs_ignored_count) = roots.add_parsable_certificates(cert_chain.clone());
+            let client_cert_verifier = WebPkiClientVerifier::builder(roots.into()).build()?;
+            server_config = ServerConfig::builder().with_client_cert_verifier(client_cert_verifier).with_single_cert(cert_chain, server_key)?;
+        }
+		Ok(server_config)
+    }
+
+
+    async fn handle_tls_listen_input(&self) -> Result<Reader, DatapipeError> {
+        let address = self.input.tls_input.as_ref().unwrap();
+        match self.get_tls_listen_input_config() {
+            Ok(tls_config) => match TlsListenReader::new(address, tls_config).await {
+                Ok(tls_listen_reader) => {
+                    info!("Using TLS listen input");
+                    Ok(Reader::TlsListen(tls_listen_reader))
+                }
+                Err(error) => {
+                    let error_message = format!("TLS listen input error {}: {}", &address, error_root_cause(&error));
+                    error!("{error_message}");
+                    Err(DatapipeError::InputOutputError(error_message))
+                }
+            },
+            Err(error) => {
+                let error_message = format!("TLS listen input setup error: {}", error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
             }
         }
     }
@@ -665,6 +842,10 @@ impl ProgramArgs {
         if self.input.tls_input.is_some() {
             Self::check_reader_set(&maybe_reader)?;
             maybe_reader = Some(self.handle_tls_input().await?);
+        }
+        if self.input.tls_listen_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_tls_listen_input().await?);
         }
         if self.input.udp_input.is_some() {
             Self::check_reader_set(&maybe_reader)?;
@@ -915,7 +1096,7 @@ impl ProgramArgs {
     async fn handle_tls_output(&self) -> Result<Writer, DatapipeError> {
         let address = self.output.tls_output.as_ref().unwrap();
         let tls_config = self.get_tls_output_config()?;
-        match TlsReaderWriter::new(address.to_owned(), tls_config).await {
+        match TlsReaderWriter::new(address, tls_config).await {
             Ok(tls_writer) => {
                 info!("Using TLS output");
                 Ok(Writer::Tls(tls_writer))
@@ -973,7 +1154,7 @@ impl ProgramArgs {
                 // get client certificate
                 match self.tls_output.tls_output_client_key.as_ref() {
                     Some(tls_client_key_path) => {
-                        let client_key = get_tls_client_key(tls_client_key_path)?;
+                        let client_key = get_tls_private_key(tls_client_key_path)?;
                         // finish building the config with cert chain and client key
                         match config.with_client_auth_cert(cert_chain, client_key) {
                             Ok(tls_config) => {
@@ -1192,14 +1373,14 @@ fn get_tls_cert_chain(
     Ok(cert_chain)
 }
 
-fn get_tls_client_key(
-    tls_client_key_path: &PathBuf,
+fn get_tls_private_key(
+    tls_private_key_path: &PathBuf,
 ) -> Result<PrivateKeyDer<'static>, DatapipeError> {
     let private_key_der: PrivateKeyDer<'static>;
-    match File::open(tls_client_key_path) {
-        Ok(tls_client_key_file) => {
-            let mut client_key_buffer = BufReader::new(tls_client_key_file);
-            match private_key(&mut client_key_buffer) {
+    match File::open(tls_private_key_path) {
+        Ok(tls_private_key_file) => {
+            let mut private_key_buffer = BufReader::new(tls_private_key_file);
+            match private_key(&mut private_key_buffer) {
                 Ok(maybe_private_key_der) => match maybe_private_key_der {
                     Some(der) => {
                         private_key_der = der;
@@ -1207,7 +1388,7 @@ fn get_tls_client_key(
                     None => {
                         let error_message = format!(
                             "Private key not found in file: {:?}; file must be in PEM format",
-                            &tls_client_key_path
+                            &tls_private_key_path
                         );
                         error!("{error_message}");
                         return Err(DatapipeError::ValidationError(error_message));
@@ -1215,8 +1396,8 @@ fn get_tls_client_key(
                 },
                 Err(error) => {
                     let error_message = format!(
-                        "Invalid or corrupted TLS client key file: {:?}: {}",
-                        &tls_client_key_path,
+                        "Invalid or corrupted TLS private key file: {:?}: {}",
+                        &tls_private_key_path,
                         error_root_cause(&error)
                     );
                     error!("{error_message}");
@@ -1226,8 +1407,8 @@ fn get_tls_client_key(
         }
         Err(error) => {
             let error_message = format!(
-                "Cannot open TLS client key file: {:?}: {}",
-                &tls_client_key_path,
+                "Cannot open TLS private key file: {:?}: {}",
+                &tls_private_key_path,
                 error_root_cause(&error)
             );
             error!("{error_message}");

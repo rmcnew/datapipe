@@ -152,6 +152,7 @@ async fn writer_child(mut receiver: Receiver<Vec<u8>>, mut writers: Vec<Writer>)
     }
 }
 
+/// library API entry point: just supply parameters and run it
 pub async fn run_data_pipe(parameters: Parameters) {
     // vec to track child threads
     let mut children = Vec::new();
