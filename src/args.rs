@@ -103,11 +103,11 @@ pub struct HttpsInputArgs {
     #[arg(long = "https-input-client-identity")]
     pub https_input_client_identity: Option<PathBuf>,
     /// DANGER! Do not validate hostnames in HTTPS setup.  Use with caution.  DANGER!
-    #[arg(long = "https-input-allow-invalid-hostnames")]
-    pub https_input_allow_invalid_hostnames: Option<bool>,
+    #[arg(long = "https-input-allow-invalid-hostnames", default_value_t = false)]
+    pub https_input_allow_invalid_hostnames: bool,
     /// DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
-    #[arg(long = "https-input-allow-invalid-certificates")]
-    pub https_input_allow_invalid_certificates: Option<bool>,
+    #[arg(long = "https-input-allow-invalid-certificates", default_value_t = false)]
+    pub https_input_allow_invalid_certificates: bool,
 }
 
 /// Additional parameters needed for TLS input
@@ -181,7 +181,7 @@ pub struct OutputArgs {
     #[arg(long = "https-output")]
     pub https_output: Option<String>,
     /// write data to STDOUT
-    #[arg(long = "stdout-output")]
+    #[arg(long = "stdout-output", default_value_t = false)]
     pub stdout_output: bool,
     /// write data to a TCP address
     #[arg(long = "tcp-output")]
@@ -205,8 +205,8 @@ pub struct HttpOutputArgs {
     #[arg(long = "http-output-delimiter")]
     pub http_output_delimiter: Option<Vec<u8>>,
     /// should the delimiter be included with the segment that preceeds it?  defaults to true
-    #[arg(long = "http-output-include-delimiter")]
-    pub http_output_include_delimiter: Option<bool>,
+    #[arg(long = "http-output-include-delimiter", default_value_t = true)]
+    pub http_output_include_delimiter: bool,
 }
 
 /// Additional parameters for HTTPS output
@@ -232,11 +232,11 @@ pub struct HttpsOutputArgs {
     #[arg(long = "https-output-client-identity")]
     pub https_output_client_identity: Option<PathBuf>,
     /// DANGER! Do not validate hostnames in HTTPS setup.  Use with caution.  DANGER!
-    #[arg(long = "https-output-allow-invalid-hostnames")]
-    pub https_output_allow_invalid_hostnames: Option<bool>,
+    #[arg(long = "https-output-allow-invalid-hostnames", default_value_t = false)]
+    pub https_output_allow_invalid_hostnames: bool,
     /// DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
-    #[arg(long = "https-output-allow-invalid-certificates")]
-    pub https_output_allow_invalid_certificates: Option<bool>,
+    #[arg(long = "https-output-allow-invalid-certificates", default_value_t = false)]
+    pub https_output_allow_invalid_certificates: bool,
 }
 
 /// Additional parameters needed for TLS output
@@ -253,8 +253,8 @@ pub struct TlsOutputArgs {
     #[arg(long = "tls-output-root-ca")]
     pub tls_output_root_ca: Option<PathBuf>,
     /// DANGER! Do not validate server identity.  Use with caution. DANGER!
-    #[arg(long = "tls-output-skip-server-verify")]
-    pub tls_output_skip_server_verify: Option<bool>,
+    #[arg(long = "tls-output-skip-server-verify", default_value_t = false)]
+    pub tls_output_skip_server_verify: bool,
 }
 
 /// Logging parameters
@@ -349,16 +349,12 @@ impl ProgramArgs {
         let maybe_crls;
         let maybe_identity;
 
-        let allow_invalid_hostnames = *self
+        let allow_invalid_hostnames = self
             .https_input
-            .https_input_allow_invalid_hostnames
-            .as_ref()
-            .unwrap_or(&false);
-        let allow_invalid_certs = *self
+            .https_input_allow_invalid_hostnames;
+        let allow_invalid_certs = self
             .https_input
-            .https_input_allow_invalid_certificates
-            .as_ref()
-            .unwrap_or(&false);
+            .https_input_allow_invalid_certificates;
 
         if self.https_input.https_input_rate.is_some() {
             let read_rate_millis = self.https_input.https_input_rate.unwrap();
@@ -724,7 +720,7 @@ impl ProgramArgs {
             let CertifiedKey { cert, key_pair } = self.generate_self_signed()?;
             cert_chain = Vec::new();
             cert_chain.push(cert.der().clone());
-            match PrivateKeyDer::from_pem(SectionKind::PrivateKey, key_pair.serialize_pem().into_bytes()) {
+            match PrivateKeyDer::from_pem(SectionKind::PrivateKey, key_pair.serialize_der()) {
                 Some(private_key) => {
                     server_key = private_key;
                 }
@@ -751,7 +747,7 @@ impl ProgramArgs {
 
 
     async fn handle_tls_listen_input(&self) -> Result<Reader, DatapipeError> {
-        let address = self.input.tls_input.as_ref().unwrap();
+        let address = self.input.tls_listen_input.as_ref().unwrap();
         match self.get_tls_listen_input_config() {
             Ok(tls_config) => match TlsListenReader::new(address, tls_config).await {
                 Ok(tls_listen_reader) => {
@@ -899,11 +895,7 @@ impl ProgramArgs {
         } else {
             delimiter = HttpWriter::DEFAULT_DELIMITER.to_vec();
         }
-        if self.http_output.http_output_include_delimiter.is_some() {
-            include_delimiter = self.http_output.http_output_include_delimiter.unwrap();
-        } else {
-            include_delimiter = true;
-        }
+        include_delimiter = self.http_output.http_output_include_delimiter;
         if self.http_output.http_output_rate.is_some() {
             output_rate = Duration::from_millis(self.http_output.http_output_rate.unwrap());
         } else {
@@ -932,16 +924,12 @@ impl ProgramArgs {
         let maybe_crls: Option<Vec<CertificateRevocationList>>;
         let maybe_identity: Option<Identity>;
 
-        let allow_invalid_hostnames = *self
+        let allow_invalid_hostnames = self
             .https_output
-            .https_output_allow_invalid_hostnames
-            .as_ref()
-            .unwrap_or(&false);
-        let allow_invalid_certs = *self
+            .https_output_allow_invalid_hostnames;
+        let allow_invalid_certs = self
             .https_output
-            .https_output_allow_invalid_certificates
-            .as_ref()
-            .unwrap_or(&false);
+            .https_output_allow_invalid_certificates;
 
         if self.https_output.https_output_rate.is_some() {
             let write_rate_millis = self.https_output.https_output_rate.unwrap();
@@ -1138,7 +1126,6 @@ impl ProgramArgs {
         let config: ConfigBuilder<ClientConfig, WantsClientCert> = if self
             .tls_output
             .tls_output_skip_server_verify
-            .unwrap_or(false)
         {
             let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
             dangerous_config

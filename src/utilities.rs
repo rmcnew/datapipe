@@ -22,6 +22,7 @@ pub fn port_available(port: u16) -> bool {
         let socket = TcpSocket::new_v4().unwrap();
         // set socket options so the port is available as soon as possible
         socket.set_reuseaddr(true).unwrap();
+        #[cfg(not(windows))]
         socket.set_reuseport(true).unwrap();
         socket.set_keepalive(false).unwrap();
         socket.set_linger(None).unwrap();

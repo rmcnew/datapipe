@@ -114,6 +114,7 @@ async fn integration_test_uucp_file() {
     
 }
 
+// send file over localhost socket using inline encryption over TCP
 #[tokio::test]
 async fn integration_test_weak_scp_file() {    
     let test_document_pathbuf = get_test_document().unwrap();
@@ -169,6 +170,7 @@ async fn integration_test_weak_scp_file() {
 }
 
 
+// send file over localhost socket using inline encryption over TLS
 #[tokio::test]
 async fn integration_test_strong_scp_file() {    
     let test_document_pathbuf = get_test_document().unwrap();
@@ -192,13 +194,16 @@ async fn integration_test_strong_scp_file() {
         test_document_pathbuf.to_str().unwrap().to_string(),
         "--encrypt".to_string(),
         encryption_key_string.clone(),
-        "--tcp-output".to_string(),
+        "--tls-output".to_string(),
         tcp_address.clone(),
+        "--tls-output-skip-server-verify".to_string(),
         //"--keep-logs".to_string(),
     ];
     let args2 = vec![
-        "--tcp-listen-input".to_string(),
+        "--tls-listen-input".to_string(),
         tcp_address.clone(),
+        "--tls-listen-input-generate-self-signed".to_string(),
+        "--tls-listen-input-skip-client-verify".to_string(),
         "--decrypt".to_string(),
         encryption_key_string,
         "--file-output".to_string(),

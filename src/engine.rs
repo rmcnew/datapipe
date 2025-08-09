@@ -39,7 +39,7 @@ async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) {
                         "reader_child:  RETRY_MAX {RETRY_MAX} reached; quitting due to repeated read errors"
                     );
                     error!("{error_message}");
-                    eprintln!("{error_message}");
+                    //eprintln!("{error_message}");
                     break;
                 }
             }
