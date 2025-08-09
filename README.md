@@ -71,7 +71,7 @@ A custom certificate chain (`--tls-input-cert-chain`) can be specified if needed
 
 TLS input uses web Certificate Authority roots by default.  A custom Certificate Authority root can be used (`--tls-input-root-ca`) if wanted.  The certificate must be in DER format.
 
-In rare circumstances, TLS server verification can be skpped (`--tls-input-skip-server-verify`). DANGER! This should only be used for testing in controlled environments.  Misuse can allow an attacker to pretend to be the source server.
+In rare circumstances, TLS server verification can be skipped (`--tls-input-skip-server-verify`). DANGER! This should only be used for testing in controlled environments.  Misuse can allow an attacker to pretend to be the source server.
 
 ### TLS Listen Input
 TLS Listen input opens a TLS port on the local machine to listen and accept a TLS connection.
