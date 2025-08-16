@@ -16,15 +16,23 @@ async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) {
         match reader.read().await {
             Ok(buffer) => {
                 if buffer.is_empty() {
-                    warn!("reader_child: no bytes read; stopping");
-                    break;
-                }
-                let v = buffer.to_vec();
-                match sender.send(v).await {
-                    Ok(()) => {}
-                    Err(_error) => {
-                        warn!("reader_child: cannot send to next stage; stopping");
+                    // retry a few times to make sure all of the input is read
+                    read_retry_count += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    if read_retry_count >= RETRY_MAX {
+                        warn!("reader_child: no bytes read; stopping");
                         break;
+                    }
+                } else { // buffer not empty send the data
+                    let v = buffer.to_vec();
+                    match sender.send(v).await {
+                        Ok(()) => {
+                            read_retry_count = 0;
+                        }
+                        Err(_error) => {
+                            warn!("reader_child: cannot send to next stage; stopping");
+                            break;
+                        }
                     }
                 }
             }
@@ -39,7 +47,6 @@ async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) {
                         "reader_child:  RETRY_MAX {RETRY_MAX} reached; quitting due to repeated read errors"
                     );
                     error!("{error_message}");
-                    //eprintln!("{error_message}");
                     break;
                 }
             }
@@ -53,9 +60,11 @@ async fn decryptor_child(
     sender: Sender<Vec<u8>>,
 ) {
     let mut buffer: Vec<u8> = Vec::new();
+    let mut retry_count = 0;
     loop {
         match receiver.recv().await {
             Some(bytes) => {
+                retry_count = 0;
                 buffer.extend_from_slice(&bytes);
                 match decryptor.decrypt(&mut buffer) {
                     Ok(plain) => match sender.send(plain).await {
@@ -74,8 +83,12 @@ async fn decryptor_child(
                 }
             },
             None => {
-                warn!("decryptor_child: no bytes received; stopping");
-                break;
+                retry_count += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                if retry_count >= RETRY_MAX {
+                    warn!("decryptor_child: no bytes received; stopping");
+                    break;
+                }
             }
         }
     }
@@ -87,9 +100,11 @@ async fn encryptor_child(
     sender: Sender<Vec<u8>>,
 ) {
     let mut buffer: Vec<u8> = Vec::new();
+    let mut retry_count = 0;
     loop {
         match receiver.recv().await {
             Some(bytes) => {
+                retry_count = 0;
                 buffer.extend_from_slice(&bytes);
                 match encryptor.encrypt(&mut buffer) {
                     Ok(cipher) => match sender.send(cipher).await {
@@ -108,8 +123,12 @@ async fn encryptor_child(
                 }
             },
             None => {
-                warn!("encryptor_child: no bytes received; stopping");
-                break;
+                retry_count += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                if retry_count >= RETRY_MAX {
+                    warn!("encryptor_child: no bytes received; stopping");
+                    break;
+                }
             }
         }
     }
@@ -124,6 +143,7 @@ async fn writer_child(mut receiver: Receiver<Vec<u8>>, mut writers: Vec<Writer>)
                     for writer in &mut writers {
                         match writer.write(&bytes).await {
                             Ok(()) => {
+                                // if at least one writer is working, continue
                                 write_retry_count = 0;
                             }
                             Err(error) => {
@@ -145,8 +165,13 @@ async fn writer_child(mut receiver: Receiver<Vec<u8>>, mut writers: Vec<Writer>)
                 }
             }
             None => {
-                warn!("writer_child: stopping");
-                break;
+                // retry a few times before quitting to ensure all the output gets written
+                write_retry_count += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                if write_retry_count >= RETRY_MAX {
+                    warn!("writer_child: stopping");
+                    break;
+                }
             }
         }
     }

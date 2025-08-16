@@ -197,7 +197,7 @@ async fn integration_test_strong_scp_file() {
         "--tls-output".to_string(),
         tcp_address.clone(),
         "--tls-output-skip-server-verify".to_string(),
-        //"--keep-logs".to_string(),
+        "--keep-logs".to_string(),
     ];
     let args2 = vec![
         "--tls-listen-input".to_string(),
@@ -208,9 +208,10 @@ async fn integration_test_strong_scp_file() {
         encryption_key_string,
         "--file-output".to_string(),
         output_file_path.to_str().unwrap().to_string(),
-        //"--keep-logs".to_string(),
+        "--keep-logs".to_string(),
     ];
     children.push(tokio::spawn(run_datapipe(args2)));
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     children.push(tokio::spawn(run_datapipe(args1)));
     for child in children {
         match child.await {
@@ -228,3 +229,4 @@ async fn integration_test_strong_scp_file() {
     remove_file(&output_file_path).await.unwrap();    
     
 }
+
