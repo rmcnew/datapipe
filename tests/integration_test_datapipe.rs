@@ -1,10 +1,11 @@
 use datapipe::datapipe_types::{DatapipeError, EncryptionKey, generate_random_string};
-use datapipe::utilities::{get_unused_port, identical_contents};
+use datapipe::utilities::{get_unused_port, identical_contents, start_after_random_delay};
 use std::path::PathBuf;
 use tokio::fs::remove_file;
 use tokio::process::Command;
 
 const CARGO_MANIFEST_DIR: &str = "CARGO_MANIFEST_DIR";
+const RANDOM_DELAY_MAX: u8 = 8;
 
 #[cfg(test)]
 fn get_datapipe_binary() -> Result<PathBuf, DatapipeError> {
@@ -41,6 +42,7 @@ async fn run_datapipe(args: Vec<String>) {
 
 #[tokio::test]
 async fn integration_test_copy_file() {    
+    start_after_random_delay(RANDOM_DELAY_MAX).await;
     let test_document_pathbuf = get_test_document().unwrap();
     let temp_dir_pathbuf = get_temp_dir();    
     // put the output file in the temp dir    
@@ -68,6 +70,7 @@ async fn integration_test_copy_file() {
 
 #[tokio::test]
 async fn integration_test_uucp_file() {    
+    start_after_random_delay(RANDOM_DELAY_MAX).await;
     let test_document_pathbuf = get_test_document().unwrap();
     let temp_dir_pathbuf = get_temp_dir();    
     // put the output file in the temp dir    
@@ -117,6 +120,7 @@ async fn integration_test_uucp_file() {
 // send file over localhost socket using inline encryption over TCP
 #[tokio::test]
 async fn integration_test_weak_scp_file() {    
+    start_after_random_delay(RANDOM_DELAY_MAX).await;
     let test_document_pathbuf = get_test_document().unwrap();
     let temp_dir_pathbuf = get_temp_dir();    
     // put the output file in the temp dir    
@@ -173,6 +177,7 @@ async fn integration_test_weak_scp_file() {
 // send file over localhost socket using inline encryption over TLS
 #[tokio::test]
 async fn integration_test_strong_scp_file() {    
+    start_after_random_delay(RANDOM_DELAY_MAX).await;
     let test_document_pathbuf = get_test_document().unwrap();
     let temp_dir_pathbuf = get_temp_dir();    
     // put the output file in the temp dir    
