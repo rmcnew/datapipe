@@ -31,17 +31,16 @@ impl HttpsReader {
             .user_agent("datapipe")
             .tls_built_in_root_certs(true) // enable system root certs
             .tls_built_in_webpki_certs(true); // enable webpki root certs
-        if maybe_root_certs.is_some() {
-            let certs = maybe_root_certs.unwrap();
-            for cert in certs {
+        if let Some(root_certs) = maybe_root_certs {
+            for cert in root_certs {
                 client_builder = client_builder.add_root_certificate(cert);
             }
         }
-        if maybe_crls.is_some() {
-            client_builder = client_builder.add_crls(maybe_crls.unwrap());
+        if let Some(crls) = maybe_crls {
+            client_builder = client_builder.add_crls(crls);
         }
-        if maybe_identity.is_some() {
-            client_builder = client_builder.identity(maybe_identity.unwrap());
+        if let Some(identity) = maybe_identity {
+            client_builder = client_builder.identity(identity);
         }
         if allow_invalid_hostnames {
             client_builder = client_builder.danger_accept_invalid_hostnames(true);
@@ -81,7 +80,7 @@ impl InputReader for HttpsReader {
                                     error
                                 );
                                 error!("{}", error_message);
-                                Err(Error::new(ErrorKind::Other, error_message))
+                                Err(Error::other(error_message))
                             }
                         }
                     }
@@ -94,13 +93,13 @@ impl InputReader for HttpsReader {
                                     res
                                 );
                                 error!("{}", error_message);
-                                Err(Error::new(ErrorKind::Other, error_message))
+                                Err(Error::other(error_message))
                             }
                             Err(error) => {
                                 let error_message =
                                     format!("HttpsInput:  decoded web server status: {}", error);
                                 error!("{}", error_message);
-                                Err(Error::new(ErrorKind::Other, error_message))
+                                Err(Error::other(error_message))
                             }
                         }
                     }

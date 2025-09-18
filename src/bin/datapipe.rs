@@ -18,7 +18,7 @@ async fn main() -> ExitCode {
         Some(ref log_dir_string) => log_dir_string,
         None => "/var/tmp",
     };
-    let _log_handle = match init_logger(&log_dir, "datapipe", args.logging_args.keep_logs) {
+    let _log_handle = match init_logger(log_dir, "datapipe", args.logging_args.keep_logs) {
         Ok(handle) => handle,
         Err(error) => {
             eprintln!("Logger error: {}", error);

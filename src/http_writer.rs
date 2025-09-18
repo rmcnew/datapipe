@@ -37,7 +37,7 @@ impl HttpWriter {
             url,
             delimiter: http_output_delimiter,
             include_delimiter: http_output_include_delimiter,
-            output_rate: http_output_rate.clone(),
+            output_rate: http_output_rate,
             last_output: Instant::now() - http_output_rate, // backdate so we can write immediately after initialization
             payload: Vec::new(),
             buffer: Vec::new(),
@@ -77,7 +77,7 @@ impl HttpWriter {
 
     async fn send_payload(&mut self) -> Result<(), Error> {
         // grab payload and replace it with an empty one
-        let payload = std::mem::replace(&mut self.payload, Vec::new());
+        let payload = std::mem::take(&mut self.payload);
         // send payload
         match self
             .client
@@ -110,7 +110,7 @@ impl OutputWriter for HttpWriter {
             self.extract_payload();
         }
         // if last_output was older than output_rate and there is data to send
-        if self.last_output.elapsed() >= self.output_rate && self.payload.len() > 0 {
+        if self.last_output.elapsed() >= self.output_rate && !self.payload.is_empty() {
             self.send_payload().await?;
         }
         Ok(())

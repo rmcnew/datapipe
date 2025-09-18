@@ -102,7 +102,6 @@ pub struct EncryptionKey {
 }
 
 impl EncryptionKey {
-
     /// create an EncryptionKey using the provided String; must be exactly 51 bytes
     pub fn new(encryption_key: &str) -> Result<Self, DatapipeError> {
         if encryption_key.len() != REQUIRED_LENGTH {
@@ -129,12 +128,14 @@ impl EncryptionKey {
             nonce: <NonceBytes>::try_from(&encryption_key_bytes[KEY_LENGTH..]).unwrap(),
         }
     }
+}
 
-    pub fn to_string(&self) -> String {
-        let mut bytes: [u8; REQUIRED_LENGTH] = [0; REQUIRED_LENGTH]; 
+impl std::fmt::Display for EncryptionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut bytes: [u8; REQUIRED_LENGTH] = [0; REQUIRED_LENGTH];
         bytes[0..KEY_LENGTH].copy_from_slice(self.key.as_slice());
         bytes[KEY_LENGTH..REQUIRED_LENGTH].copy_from_slice(self.nonce.as_slice());
-        String::from_utf8(bytes.to_vec()).unwrap()
+        write!(f, "{}", String::from_utf8(bytes.to_vec()).unwrap())
     }
 }
 

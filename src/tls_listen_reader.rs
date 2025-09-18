@@ -1,15 +1,15 @@
+use crate::datapipe_types::InputReader;
 /// "Listen for connection, then receive" Reader for TLS
 use bytes::Bytes;
 use core::net::SocketAddr;
-use crate::datapipe_types::InputReader;
 use log::{error, info};
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
-use tokio_rustls::server::TlsStream;
 use tokio_rustls::rustls::ServerConfig;
+use tokio_rustls::server::TlsStream;
 
 const TLS_LISTEN_READ_BUFFER_SIZE: usize = 2048;
 
@@ -45,14 +45,19 @@ impl InputReader for TlsListenReader {
             match self.tcp_listener.accept().await {
                 Ok((tcp_stream, address)) => {
                     info!("TCP connection from {} accepted", address);
-                    info!("TcpStream info: Local Addr:{:?}, Peer Addr:{:?}", tcp_stream.local_addr()?, tcp_stream.peer_addr()?);
+                    info!(
+                        "TcpStream info: Local Addr:{:?}, Peer Addr:{:?}",
+                        tcp_stream.local_addr()?,
+                        tcp_stream.peer_addr()?
+                    );
                     match self.tls_acceptor.accept(tcp_stream).await {
                         Ok(tls_stream) => {
                             info!("Successfully TCP connection upgraded to TLS");
                             self.maybe_tls_stream = Some(tls_stream);
                         }
                         Err(error) => {
-                            let error_message = format!("Error upgrading connection to TLS: {error}");
+                            let error_message =
+                                format!("Error upgrading connection to TLS: {error}");
                             error!("{error_message}");
                             return Err(Error::new(ErrorKind::ConnectionAborted, error_message));
                         }
@@ -81,8 +86,8 @@ impl InputReader for TlsListenReader {
 impl std::fmt::Debug for TlsListenReader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TlsListenReader")
-         .field("tcp_listener", &self.tcp_listener)
-         .field("maybe_tls_stream", &self.maybe_tls_stream)
-         .finish()
+            .field("tcp_listener", &self.tcp_listener)
+            .field("maybe_tls_stream", &self.maybe_tls_stream)
+            .finish()
     }
 }

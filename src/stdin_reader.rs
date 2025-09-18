@@ -22,3 +22,9 @@ impl InputReader for StdinReader {
         }
     }
 }
+
+impl Default for StdinReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -19,7 +19,7 @@ use crate::udp_writer::UdpWriter;
 use crate::writer::Writer;
 use clap::{Args, Parser};
 use log::{error, info};
-use rcgen::{generate_simple_self_signed, CertifiedKey};
+use rcgen::{CertifiedKey, generate_simple_self_signed};
 use reqwest::{Certificate, Identity, tls::CertificateRevocationList};
 use rustls::pki_types::pem::PemObject;
 use rustls_pemfile::{certs, private_key};
@@ -28,16 +28,17 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio_rustls::rustls::{
-    ClientConfig, ServerConfig, ConfigBuilder, DigitallySignedStruct, RootCertStore, SignatureScheme,
-};
 use tokio_rustls::rustls::client::WantsClientCert;
 use tokio_rustls::rustls::client::danger::{
     HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
 };
-use tokio_rustls::rustls::server::WebPkiClientVerifier;
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use tokio_rustls::rustls::pki_types::pem::SectionKind;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use tokio_rustls::rustls::server::WebPkiClientVerifier;
+use tokio_rustls::rustls::{
+    ClientConfig, ConfigBuilder, DigitallySignedStruct, RootCertStore, ServerConfig,
+    SignatureScheme,
+};
 use webpki_roots::TLS_SERVER_ROOTS;
 
 /// Choose one input source
@@ -106,7 +107,10 @@ pub struct HttpsInputArgs {
     #[arg(long = "https-input-allow-invalid-hostnames", default_value_t = false)]
     pub https_input_allow_invalid_hostnames: bool,
     /// DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
-    #[arg(long = "https-input-allow-invalid-certificates", default_value_t = false)]
+    #[arg(
+        long = "https-input-allow-invalid-certificates",
+        default_value_t = false
+    )]
     pub https_input_allow_invalid_certificates: bool,
 }
 
@@ -141,8 +145,11 @@ pub struct TlsListenInputArgs {
     /// DANGER! Do not validate client identity.  Use with caution. DANGER!
     #[arg(long = "tls-listen-input-skip-client-verify", default_value_t = false)]
     pub tls_listen_input_skip_client_verify: bool,
-    /// Instead of providing a certificate chain and private key, generate a self-signed certificate and private key 
-    #[arg(long = "tls-listen-input-generate-self-signed", default_value_t = false)]
+    /// Instead of providing a certificate chain and private key, generate a self-signed certificate and private key
+    #[arg(
+        long = "tls-listen-input-generate-self-signed",
+        default_value_t = false
+    )]
     pub tls_listen_input_generate_self_signed: bool,
 }
 
@@ -235,7 +242,10 @@ pub struct HttpsOutputArgs {
     #[arg(long = "https-output-allow-invalid-hostnames", default_value_t = false)]
     pub https_output_allow_invalid_hostnames: bool,
     /// DANGER! Do not validate certificates in HTTPS setup.  Use with caution. DANGER!
-    #[arg(long = "https-output-allow-invalid-certificates", default_value_t = false)]
+    #[arg(
+        long = "https-output-allow-invalid-certificates",
+        default_value_t = false
+    )]
     pub https_output_allow_invalid_certificates: bool,
 }
 
@@ -344,24 +354,19 @@ impl ProgramArgs {
     /// Prepare a reader for HTTPS input
     async fn handle_https_input(&self) -> Result<Reader, DatapipeError> {
         let url = self.input.https_input.as_ref().unwrap(); // is_some checked in parent function    
-        let read_rate;
         let maybe_root_certs;
         let maybe_crls;
         let maybe_identity;
 
-        let allow_invalid_hostnames = self
-            .https_input
-            .https_input_allow_invalid_hostnames;
-        let allow_invalid_certs = self
-            .https_input
-            .https_input_allow_invalid_certificates;
+        let allow_invalid_hostnames = self.https_input.https_input_allow_invalid_hostnames;
+        let allow_invalid_certs = self.https_input.https_input_allow_invalid_certificates;
 
-        if self.https_input.https_input_rate.is_some() {
+        let read_rate = if self.https_input.https_input_rate.is_some() {
             let read_rate_millis = self.https_input.https_input_rate.unwrap();
-            read_rate = Duration::from_millis(read_rate_millis);
+            Duration::from_millis(read_rate_millis)
         } else {
-            read_rate = HttpsReader::DEFAULT_READ_RATE;
-        }
+            HttpsReader::DEFAULT_READ_RATE
+        };
 
         if self.https_input.https_input_root_certificates.is_some() {
             let root_cert_path = self
@@ -517,7 +522,10 @@ impl ProgramArgs {
         // setup root cert store
         let mut root_cert_store = RootCertStore::empty();
         if self.tls_input.tls_input_root_ca.is_some() {
-            match get_root_ca(self.tls_input.tls_input_root_ca.as_ref().unwrap(), &mut root_cert_store,) {
+            match get_root_ca(
+                self.tls_input.tls_input_root_ca.as_ref().unwrap(),
+                &mut root_cert_store,
+            ) {
                 Ok(()) => {} // no issues loading CA roots
                 Err(error) => {
                     let error_message = format!(
@@ -534,19 +542,24 @@ impl ProgramArgs {
         Ok(root_cert_store)
     }
 
-    fn get_tls_input_client_config_builder(&self) -> Result<ConfigBuilder<ClientConfig, WantsClientCert>, DatapipeError> {
+    fn get_tls_input_client_config_builder(
+        &self,
+    ) -> Result<ConfigBuilder<ClientConfig, WantsClientCert>, DatapipeError> {
         // check if no verification was requested
         if self.tls_input.tls_input_skip_server_verify {
             let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
-            return Ok(dangerous_config.with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new())));
+            Ok(dangerous_config
+                .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new())))
         } else {
             let root_cert_store = self.setup_root_cert_store()?;
-            return Ok(ClientConfig::builder().with_root_certificates(root_cert_store));
+            Ok(ClientConfig::builder().with_root_certificates(root_cert_store))
         }
     }
 
     // TLS input-specific wrapper for get_tls_cert_chain
-    fn get_tls_input_certificate_chain(&self) -> Result<Option<Vec<CertificateDer<'static>>>, DatapipeError> {
+    fn get_tls_input_certificate_chain(
+        &self,
+    ) -> Result<Option<Vec<CertificateDer<'static>>>, DatapipeError> {
         match self.tls_input.tls_input_cert_chain.as_ref() {
             Some(tls_cert_chain_path) => {
                 // get certificate chain
@@ -557,7 +570,11 @@ impl ProgramArgs {
                     }
                     Err(error) => {
                         // failed to get cert chain
-                        let error_message = format!("Error getting TLS input certificate chain {:?}: {}", tls_cert_chain_path, error_root_cause(&error));
+                        let error_message = format!(
+                            "Error getting TLS input certificate chain {:?}: {}",
+                            tls_cert_chain_path,
+                            error_root_cause(&error)
+                        );
                         error!("{error_message}");
                         Err(DatapipeError::InputOutputError(error_message))
                     }
@@ -588,7 +605,11 @@ impl ProgramArgs {
                     }
                     Err(error) => {
                         // failed to get client key
-                        let error_message = format!("Error getting TLS input client key {:?}: {}", tls_client_key_path, error_root_cause(&error));
+                        let error_message = format!(
+                            "Error getting TLS input client key {:?}: {}",
+                            tls_client_key_path,
+                            error_root_cause(&error)
+                        );
                         error!("{error_message}");
                         Err(DatapipeError::InputOutputError(error_message))
                     }
@@ -599,7 +620,7 @@ impl ProgramArgs {
                 if self.tls_input.tls_input_cert_chain.is_some() {
                     let error_message = "TLS input certificate chain (--tls-input-cert-chain) requires client key (--tls-input-client-key) to also be used";
                     error!("{error_message}");
-                    return Err(DatapipeError::ValidationError( error_message.to_string()));
+                    return Err(DatapipeError::ValidationError(error_message.to_string()));
                 }
                 info!("No TLS input client key provided");
                 Ok(None)
@@ -611,30 +632,33 @@ impl ProgramArgs {
         let config_builder = self.get_tls_input_client_config_builder()?;
         let maybe_cert_chain = self.get_tls_input_certificate_chain()?;
         let maybe_client_key = self.get_tls_input_client_key()?;
-        // both get_tls_input_certificate_chain and get_tls_input_client_key 
+        // both get_tls_input_certificate_chain and get_tls_input_client_key
         // check to make sure if one is present the other is also present
-        if maybe_cert_chain.is_some() && maybe_client_key.is_some() {
+        if let Some(cert_chain) = maybe_cert_chain
+            && let Some(client_key) = maybe_client_key
+        {
             // finish building the config with cert chain and client key
-            let cert_chain = maybe_cert_chain.unwrap();
-            let client_key = maybe_client_key.unwrap();
             match config_builder.with_client_auth_cert(cert_chain, client_key) {
-                Ok(tls_config) => {
-                    return Ok(tls_config);
-                }
+                Ok(tls_config) => Ok(tls_config),
                 Err(error) => {
-                    let error_message = format!("Error creating TLS input config with cert chain and client key: {}", error_root_cause(&error));
+                    let error_message = format!(
+                        "Error creating TLS input config with cert chain and client key: {}",
+                        error_root_cause(&error)
+                    );
                     error!("{error_message}");
-                    return Err(DatapipeError::InputOutputError(error_message));
+                    Err(DatapipeError::InputOutputError(error_message))
                 }
             }
         } else {
             // finishing build the config with no client authentication
-            return Ok(config_builder.with_no_client_auth());
+            Ok(config_builder.with_no_client_auth())
         }
     }
 
     // TLS listen input-specific wrapper for get_tls_cert_chain
-    fn get_tls_listen_input_certificate_chain(&self) -> Result<Option<Vec<CertificateDer<'static>>>, DatapipeError> {
+    fn get_tls_listen_input_certificate_chain(
+        &self,
+    ) -> Result<Option<Vec<CertificateDer<'static>>>, DatapipeError> {
         match self.tls_listen_input.tls_listen_input_cert_chain.as_ref() {
             Some(tls_cert_chain_path) => {
                 // get certificate chain
@@ -645,7 +669,11 @@ impl ProgramArgs {
                     }
                     Err(error) => {
                         // failed to get cert chain
-                        let error_message = format!("Error getting TLS listen input certificate chain {:?}: {}", tls_cert_chain_path, error_root_cause(&error));
+                        let error_message = format!(
+                            "Error getting TLS listen input certificate chain {:?}: {}",
+                            tls_cert_chain_path,
+                            error_root_cause(&error)
+                        );
                         error!("{error_message}");
                         Err(DatapipeError::InputOutputError(error_message))
                     }
@@ -666,7 +694,9 @@ impl ProgramArgs {
     }
 
     // TLS input-specific wrapper for get_tls_private_key
-    fn get_tls_listen_input_server_key(&self) -> Result<Option<PrivateKeyDer<'static>>, DatapipeError> {
+    fn get_tls_listen_input_server_key(
+        &self,
+    ) -> Result<Option<PrivateKeyDer<'static>>, DatapipeError> {
         match self.tls_listen_input.tls_listen_input_server_key.as_ref() {
             Some(tls_server_key_path) => {
                 match get_tls_private_key(tls_server_key_path) {
@@ -676,7 +706,11 @@ impl ProgramArgs {
                     }
                     Err(error) => {
                         // failed to get server key
-                        let error_message = format!("Error getting TLS listen input server key {:?}: {}", tls_server_key_path, error_root_cause(&error));
+                        let error_message = format!(
+                            "Error getting TLS listen input server key {:?}: {}",
+                            tls_server_key_path,
+                            error_root_cause(&error)
+                        );
                         error!("{error_message}");
                         Err(DatapipeError::InputOutputError(error_message))
                     }
@@ -704,7 +738,7 @@ impl ProgramArgs {
             Err(error) => {
                 let error_message = format!("Error generating self-signed certificate: {error}");
                 error!("{error_message}");
-                return Err(DatapipeError::ConfigurationError(error_message));
+                Err(DatapipeError::ConfigurationError(error_message))
             }
         }
     }
@@ -714,7 +748,6 @@ impl ProgramArgs {
         let maybe_server_key = self.get_tls_listen_input_server_key()?;
         let mut cert_chain: Vec<CertificateDer>;
         let server_key: PrivateKeyDer;
-		let server_config: ServerConfig;
         if maybe_cert_chain.is_none() && maybe_server_key.is_none() {
             // generate a self-signed cert and keys
             let CertifiedKey { cert, key_pair } = self.generate_self_signed()?;
@@ -734,15 +767,20 @@ impl ProgramArgs {
             cert_chain = maybe_cert_chain.unwrap();
             server_key = maybe_server_key.unwrap();
         }
-        if self.tls_listen_input.tls_listen_input_skip_client_verify {
-            server_config = ServerConfig::builder().with_no_client_auth().with_single_cert(cert_chain, server_key)?;
+        let server_config = if self.tls_listen_input.tls_listen_input_skip_client_verify {
+            ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(cert_chain, server_key)?
         } else {
-			let mut roots = RootCertStore::empty();
-			let (_certs_added_count, _certs_ignored_count) = roots.add_parsable_certificates(cert_chain.clone());
+            let mut roots = RootCertStore::empty();
+            let (_certs_added_count, _certs_ignored_count) =
+                roots.add_parsable_certificates(cert_chain.clone());
             let client_cert_verifier = WebPkiClientVerifier::builder(roots.into()).build()?;
-            server_config = ServerConfig::builder().with_client_cert_verifier(client_cert_verifier).with_single_cert(cert_chain, server_key)?;
-        }
-		Ok(server_config)
+            ServerConfig::builder()
+                .with_client_cert_verifier(client_cert_verifier)
+                .with_single_cert(cert_chain, server_key)?
+        };
+        Ok(server_config)
     }
 
     /// Prepare a reader for TLS listen input
@@ -755,13 +793,18 @@ impl ProgramArgs {
                     Ok(Reader::TlsListen(tls_listen_reader))
                 }
                 Err(error) => {
-                    let error_message = format!("TLS listen input error {}: {}", &address, error_root_cause(&error));
+                    let error_message = format!(
+                        "TLS listen input error {}: {}",
+                        &address,
+                        error_root_cause(&error)
+                    );
                     error!("{error_message}");
                     Err(DatapipeError::InputOutputError(error_message))
                 }
             },
             Err(error) => {
-                let error_message = format!("TLS listen input setup error: {}", error_root_cause(&error));
+                let error_message =
+                    format!("TLS listen input setup error: {}", error_root_cause(&error));
                 error!("{error_message}");
                 Err(DatapipeError::InputOutputError(error_message))
             }
@@ -856,14 +899,14 @@ impl ProgramArgs {
             None => {
                 let error_message = "No input source provided!";
                 error!("{error_message}");
-                return Err(DatapipeError::ValidationError(error_message.to_string()));
+                Err(DatapipeError::ValidationError(error_message.to_string()))
             }
         }
     }
 
     async fn handle_file_output(&self) -> Result<Writer, DatapipeError> {
         let file_path = self.output.file_output.as_ref().unwrap();
-        match FileWriter::new(&file_path).await {
+        match FileWriter::new(file_path).await {
             Ok(file_writer) => {
                 info!("Using FILE output for path: {:?}", file_path);
                 Ok(Writer::File(file_writer))
@@ -882,26 +925,22 @@ impl ProgramArgs {
 
     fn handle_http_output(&self) -> Result<Writer, DatapipeError> {
         let url = self.output.http_output.as_ref().unwrap();
-        let output_rate: Duration;
-        let delimiter: Vec<u8>;
-        let include_delimiter: bool;
-        if self.http_output.http_output_delimiter.is_some() {
-            delimiter = self
-                .http_output
+        let delimiter: Vec<u8> = if self.http_output.http_output_delimiter.is_some() {
+            self.http_output
                 .http_output_delimiter
                 .as_ref()
                 .unwrap()
-                .to_vec();
+                .to_vec()
         } else {
-            delimiter = HttpWriter::DEFAULT_DELIMITER.to_vec();
-        }
-        include_delimiter = self.http_output.http_output_include_delimiter;
-        if self.http_output.http_output_rate.is_some() {
-            output_rate = Duration::from_millis(self.http_output.http_output_rate.unwrap());
+            HttpWriter::DEFAULT_DELIMITER.to_vec()
+        };
+        let include_delimiter = self.http_output.http_output_include_delimiter;
+        let output_rate: Duration = if self.http_output.http_output_rate.is_some() {
+            Duration::from_millis(self.http_output.http_output_rate.unwrap())
         } else {
-            output_rate = HttpWriter::DEFAULT_WRITE_RATE;
-        }
-        match HttpWriter::new(&url, delimiter, include_delimiter, output_rate) {
+            HttpWriter::DEFAULT_WRITE_RATE
+        };
+        match HttpWriter::new(url, delimiter, include_delimiter, output_rate) {
             Ok(http_writer) => {
                 info!("Using HTTP output");
                 Ok(Writer::Http(http_writer))
@@ -917,42 +956,35 @@ impl ProgramArgs {
 
     async fn handle_https_output(&self) -> Result<Writer, DatapipeError> {
         let url = self.output.http_output.as_ref().unwrap();
-        let write_rate;
-        let delimiter: Vec<u8>;
-        let include_delimiter: bool;
+
         let maybe_root_certs: Option<Vec<Certificate>>;
         let maybe_crls: Option<Vec<CertificateRevocationList>>;
         let maybe_identity: Option<Identity>;
 
-        let allow_invalid_hostnames = self
-            .https_output
-            .https_output_allow_invalid_hostnames;
-        let allow_invalid_certs = self
-            .https_output
-            .https_output_allow_invalid_certificates;
+        let allow_invalid_hostnames = self.https_output.https_output_allow_invalid_hostnames;
+        let allow_invalid_certs = self.https_output.https_output_allow_invalid_certificates;
 
-        if self.https_output.https_output_rate.is_some() {
+        let write_rate = if self.https_output.https_output_rate.is_some() {
             let write_rate_millis = self.https_output.https_output_rate.unwrap();
-            write_rate = Duration::from_millis(write_rate_millis);
+            Duration::from_millis(write_rate_millis)
         } else {
-            write_rate = HttpsWriter::DEFAULT_WRITE_RATE;
-        }
+            HttpsWriter::DEFAULT_WRITE_RATE
+        };
 
-        if self.https_output.https_output_delimiter.is_some() {
-            delimiter = self
-                .https_output
+        let delimiter: Vec<u8> = if self.https_output.https_output_delimiter.is_some() {
+            self.https_output
                 .https_output_delimiter
                 .as_ref()
                 .unwrap()
-                .to_vec();
+                .to_vec()
         } else {
-            delimiter = HttpsWriter::DEFAULT_DELIMITER.to_vec();
-        }
-        if self.https_output.https_output_include_delimiter.is_some() {
-            include_delimiter = self.https_output.https_output_include_delimiter.unwrap();
-        } else {
-            include_delimiter = true;
-        }
+            HttpsWriter::DEFAULT_DELIMITER.to_vec()
+        };
+
+        let include_delimiter = self
+            .https_output
+            .https_output_include_delimiter
+            .unwrap_or(true);
 
         if self.https_output.https_output_root_certificates.is_some() {
             let root_cert_path = self
@@ -1034,7 +1066,7 @@ impl ProgramArgs {
         }
 
         match HttpsWriter::new(
-            &url,
+            url,
             delimiter,
             include_delimiter,
             write_rate,
@@ -1087,7 +1119,7 @@ impl ProgramArgs {
         match TlsReaderWriter::new(address, tls_config).await {
             Ok(tls_writer) => {
                 info!("Using TLS output");
-                Ok(Writer::Tls(tls_writer))
+                Ok(Writer::Tls(Box::new(tls_writer)))
             }
             Err(error) => {
                 let error_message = format!(
@@ -1123,16 +1155,14 @@ impl ProgramArgs {
         }
         // begin build the config
         // check if no verification was requested
-        let config: ConfigBuilder<ClientConfig, WantsClientCert> = if self
-            .tls_output
-            .tls_output_skip_server_verify
-        {
-            let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
-            dangerous_config
-                .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new()))
-        } else {
-            ClientConfig::builder().with_root_certificates(root_cert_store)
-        };
+        let config: ConfigBuilder<ClientConfig, WantsClientCert> =
+            if self.tls_output.tls_output_skip_server_verify {
+                let dangerous_config = ConfigBuilder::dangerous(ClientConfig::builder());
+                dangerous_config
+                    .with_custom_certificate_verifier(Arc::new(NoCertificateVerification::new()))
+            } else {
+                ClientConfig::builder().with_root_certificates(root_cert_store)
+            };
         // see if client auth is needed
         match self.tls_output.tls_output_cert_chain.as_ref() {
             Some(tls_cert_chain_path) => {
@@ -1144,16 +1174,14 @@ impl ProgramArgs {
                         let client_key = get_tls_private_key(tls_client_key_path)?;
                         // finish building the config with cert chain and client key
                         match config.with_client_auth_cert(cert_chain, client_key) {
-                            Ok(tls_config) => {
-                                return Ok(tls_config);
-                            }
+                            Ok(tls_config) => Ok(tls_config),
                             Err(error) => {
                                 let error_message = format!(
                                     "Error creating TLS output config with cert chain and client key: {}",
                                     error_root_cause(&error)
                                 );
                                 error!("{error_message}");
-                                return Err(DatapipeError::ValidationError(error_message));
+                                Err(DatapipeError::ValidationError(error_message))
                             }
                         }
                     }
@@ -1161,7 +1189,7 @@ impl ProgramArgs {
                         // the user should have provided a client key too
                         let error_message = "TLS output certificate chain (--tls-output-cert-chain) requires client key (--tls-output-client-key) to also be used";
                         error!("{error_message}");
-                        return Err(DatapipeError::ValidationError(error_message.to_string()));
+                        Err(DatapipeError::ValidationError(error_message.to_string()))
                     }
                 }
             }
@@ -1173,14 +1201,14 @@ impl ProgramArgs {
                     return Err(DatapipeError::ValidationError(error_message.to_string()));
                 }
                 // finishing build the config with no client authentication
-                return Ok(config.with_no_client_auth());
+                Ok(config.with_no_client_auth())
             }
         }
     }
 
     async fn handle_udp_output(&self) -> Result<Writer, DatapipeError> {
         let address = self.output.udp_output.as_ref().unwrap();
-        match UdpWriter::new(&address).await {
+        match UdpWriter::new(address).await {
             Ok(udp_writer) => {
                 info!("Using UDP output");
                 Ok(Writer::Udp(udp_writer))
@@ -1236,7 +1264,7 @@ impl ProgramArgs {
     fn get_encryption_args(&self) -> Result<Option<StreamEncryptor>, DatapipeError> {
         if self.encryption_args.generate_encryption_key {
             let encryption_key = EncryptionKey::generate();
-            println!("Generated encryption key: {}", encryption_key.to_string());
+            println!("Generated encryption key: {}", encryption_key);
             let encryptor = StreamEncryptor::new(encryption_key)?;
             return Ok(Some(encryptor));
         }

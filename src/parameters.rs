@@ -77,13 +77,13 @@ impl ParametersBuilder {
     pub fn build(self) -> Result<Parameters, DatapipeError> {
         if self.maybe_reader.is_none() {
             let error_message =
-                format!("No input source!  Please configure a Reader to provide input.");
+                "No input source!  Please configure a Reader to provide input.".to_string();
             error!("{error_message}");
             return Err(DatapipeError::ValidationError(error_message));
         }
         if self.writers.is_empty() {
             let error_message =
-                format!("No output destination!  Please configure a Writer for output.");
+                "No output destination!  Please configure a Writer for output.".to_string();
             error!("{error_message}");
             return Err(DatapipeError::ValidationError(error_message));
         }
@@ -93,5 +93,11 @@ impl ParametersBuilder {
             maybe_encryptor: self.maybe_encryptor,
             writers: self.writers,
         })
+    }
+}
+
+impl Default for ParametersBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }

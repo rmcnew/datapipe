@@ -1,5 +1,5 @@
 /// The main data read-write loop
-use crate::datapipe_types::{error_root_cause, InputReader, OutputWriter};
+use crate::datapipe_types::{InputReader, OutputWriter, error_root_cause};
 use crate::encryption::{StreamDecryptor, StreamEncryptor};
 use crate::parameters::Parameters;
 use crate::reader::Reader;
@@ -23,7 +23,8 @@ async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) {
                         warn!("reader_child: no bytes read; stopping");
                         break;
                     }
-                } else { // buffer not empty send the data
+                } else {
+                    // buffer not empty send the data
                     let v = buffer.to_vec();
                     match sender.send(v).await {
                         Ok(()) => {
@@ -75,13 +76,16 @@ async fn decryptor_child(
                         }
                     },
                     Err(error) => {
-                        let error_message = format!("decryptor_child: error decrypting data: {}", error_root_cause(&error));
+                        let error_message = format!(
+                            "decryptor_child: error decrypting data: {}",
+                            error_root_cause(&error)
+                        );
                         error!("{error_message}");
                         eprintln!("{error_message}");
                         break;
                     }
                 }
-            },
+            }
             None => {
                 retry_count += 1;
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -115,13 +119,16 @@ async fn encryptor_child(
                         }
                     },
                     Err(error) => {
-                        let error_message = format!("encryptor_child: error encrypting data: {}", error_root_cause(&error));
+                        let error_message = format!(
+                            "encryptor_child: error encrypting data: {}",
+                            error_root_cause(&error)
+                        );
                         error!("{error_message}");
                         eprintln!("{error_message}");
                         break;
                     }
                 }
-            },
+            }
             None => {
                 retry_count += 1;
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -150,7 +157,9 @@ async fn writer_child(mut receiver: Receiver<Vec<u8>>, mut writers: Vec<Writer>)
                                 // should the count be per output sink?
                                 let error_cause = error_root_cause(&error);
                                 write_retry_count += 1;
-                                warn!("writer_child:  Error writing to output: {error_cause}; write_retry_count is {write_retry_count}");
+                                warn!(
+                                    "writer_child:  Error writing to output: {error_cause}; write_retry_count is {write_retry_count}"
+                                );
                                 if write_retry_count >= RETRY_MAX {
                                     let error_message = format!(
                                         "writer_child: RETRY_MAX {RETRY_MAX} reached; quitting due to repeated write errors"

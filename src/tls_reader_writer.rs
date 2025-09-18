@@ -1,6 +1,6 @@
+use crate::datapipe_types::{InputReader, OutputWriter};
 /// Reader and Writer for TLS (TCP with TLS encryption)
 use bytes::Bytes;
-use crate::datapipe_types::{InputReader, OutputWriter};
 use log::{error, info};
 use std::io::{Error, ErrorKind};
 use std::sync::Arc;
@@ -26,7 +26,7 @@ impl TlsReaderWriter {
         match TcpStream::connect(address).await {
             Ok(tcp_stream) => {
                 // get the domain name
-                let address_domain = get_domain(&address);
+                let address_domain = get_domain(address);
                 match ServerName::try_from(address_domain.to_owned()) {
                     // use the TlsConnector to "upgrade" the TCP stream to TLS
                     Ok(domain) => match tls_connector.connect(domain, tcp_stream).await {
@@ -58,7 +58,7 @@ impl TlsReaderWriter {
 impl InputReader for TlsReaderWriter {
     async fn read(&mut self) -> Result<bytes::Bytes, Error> {
         let mut vec_bytes = Vec::with_capacity(TLS_READER_WRITER_BUFFER_SIZE);
-        self.tls_stream.read(&mut vec_bytes).await?;
+        self.tls_stream.read_exact(&mut vec_bytes).await?;
         Ok(Bytes::from(vec_bytes))
     }
 }

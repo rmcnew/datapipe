@@ -10,14 +10,18 @@ const RANDOM_DELAY_MAX: u8 = 8;
 #[cfg(test)]
 fn get_datapipe_binary() -> Result<PathBuf, DatapipeError> {
     let cargo_manifest_dir = std::env::var(CARGO_MANIFEST_DIR)?;
-    let datapipe_binary_pathbuf: PathBuf = [&cargo_manifest_dir, "target", "debug", "datapipe"].iter().collect();
+    let datapipe_binary_pathbuf: PathBuf = [&cargo_manifest_dir, "target", "debug", "datapipe"]
+        .iter()
+        .collect();
     Ok(datapipe_binary_pathbuf)
 }
 
 #[cfg(test)]
 fn get_test_document() -> Result<PathBuf, DatapipeError> {
     let cargo_manifest_dir = std::env::var(CARGO_MANIFEST_DIR)?;
-    let test_document_pathbuf: PathBuf = [&cargo_manifest_dir, "tests", "data", "document.pdf"].iter().collect();
+    let test_document_pathbuf: PathBuf = [&cargo_manifest_dir, "tests", "data", "document.pdf"]
+        .iter()
+        .collect();
     Ok(test_document_pathbuf)
 }
 
@@ -39,13 +43,12 @@ async fn run_datapipe(args: Vec<String>) {
     assert!(exit_status.success());
 }
 
-
 #[tokio::test]
-async fn integration_test_copy_file() {    
+async fn integration_test_copy_file() {
     start_after_random_delay(RANDOM_DELAY_MAX).await;
     let test_document_pathbuf = get_test_document().unwrap();
-    let temp_dir_pathbuf = get_temp_dir();    
-    // put the output file in the temp dir    
+    let temp_dir_pathbuf = get_temp_dir();
+    // put the output file in the temp dir
     let mut output_file_path = temp_dir_pathbuf.clone();
     let mut random_filename = generate_random_string(16);
     random_filename.push_str(".pdf");
@@ -56,24 +59,27 @@ async fn integration_test_copy_file() {
         "--file-input".to_string(),
         test_document_pathbuf.to_str().unwrap().to_string(),
         "--file-output".to_string(),
-        output_file_path.to_str().unwrap().to_string()
+        output_file_path.to_str().unwrap().to_string(),
     ];
     run_datapipe(args).await;
     // verify file copy worked
     assert!(output_file_path.exists());
     // compare the file contents
-    assert!(identical_contents(&test_document_pathbuf, &output_file_path).await.unwrap());
+    assert!(
+        identical_contents(&test_document_pathbuf, &output_file_path)
+            .await
+            .unwrap()
+    );
     // delete the output file
-    remove_file(&output_file_path).await.unwrap();    
+    remove_file(&output_file_path).await.unwrap();
 }
 
-
 #[tokio::test]
-async fn integration_test_uucp_file() {    
+async fn integration_test_uucp_file() {
     start_after_random_delay(RANDOM_DELAY_MAX).await;
     let test_document_pathbuf = get_test_document().unwrap();
-    let temp_dir_pathbuf = get_temp_dir();    
-    // put the output file in the temp dir    
+    let temp_dir_pathbuf = get_temp_dir();
+    // put the output file in the temp dir
     let mut output_file_path = temp_dir_pathbuf.clone();
     let mut random_filename = generate_random_string(16);
     random_filename.push_str(".pdf");
@@ -111,19 +117,22 @@ async fn integration_test_uucp_file() {
     // verify file copy worked
     assert!(output_file_path.exists());
     // compare the file contents
-    assert!(identical_contents(&test_document_pathbuf, &output_file_path).await.unwrap());
+    assert!(
+        identical_contents(&test_document_pathbuf, &output_file_path)
+            .await
+            .unwrap()
+    );
     // delete the output file
-    remove_file(&output_file_path).await.unwrap();    
-    
+    remove_file(&output_file_path).await.unwrap();
 }
 
 // send file over localhost socket using inline encryption over TCP
 #[tokio::test]
-async fn integration_test_weak_scp_file() {    
+async fn integration_test_weak_scp_file() {
     start_after_random_delay(RANDOM_DELAY_MAX).await;
     let test_document_pathbuf = get_test_document().unwrap();
-    let temp_dir_pathbuf = get_temp_dir();    
-    // put the output file in the temp dir    
+    let temp_dir_pathbuf = get_temp_dir();
+    // put the output file in the temp dir
     let mut output_file_path = temp_dir_pathbuf.clone();
     let mut random_filename = generate_random_string(16);
     random_filename.push_str(".pdf");
@@ -168,19 +177,22 @@ async fn integration_test_weak_scp_file() {
     // verify file copy worked
     assert!(output_file_path.exists());
     // compare the file contents
-    assert!(identical_contents(&test_document_pathbuf, &output_file_path).await.unwrap());
+    assert!(
+        identical_contents(&test_document_pathbuf, &output_file_path)
+            .await
+            .unwrap()
+    );
     // delete the output file
-    remove_file(&output_file_path).await.unwrap();    
+    remove_file(&output_file_path).await.unwrap();
 }
-
 
 // send file over localhost socket using inline encryption over TLS
 #[tokio::test]
-async fn integration_test_strong_scp_file() {    
+async fn integration_test_strong_scp_file() {
     start_after_random_delay(RANDOM_DELAY_MAX).await;
     let test_document_pathbuf = get_test_document().unwrap();
-    let temp_dir_pathbuf = get_temp_dir();    
-    // put the output file in the temp dir    
+    let temp_dir_pathbuf = get_temp_dir();
+    // put the output file in the temp dir
     let mut output_file_path = temp_dir_pathbuf.clone();
     let mut random_filename = generate_random_string(16);
     random_filename.push_str(".pdf");
@@ -229,9 +241,11 @@ async fn integration_test_strong_scp_file() {
     // verify file copy worked
     assert!(output_file_path.exists());
     // compare the file contents
-    assert!(identical_contents(&test_document_pathbuf, &output_file_path).await.unwrap());
+    assert!(
+        identical_contents(&test_document_pathbuf, &output_file_path)
+            .await
+            .unwrap()
+    );
     // delete the output file
-    remove_file(&output_file_path).await.unwrap();    
-    
+    remove_file(&output_file_path).await.unwrap();
 }
-

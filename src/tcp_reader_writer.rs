@@ -18,7 +18,11 @@ impl TcpReaderWriter {
         info!("TcpReaderWriter connecting to {}", address);
         match TcpStream::connect(address).await {
             Ok(tcp_stream) => {
-                info!("TcpStream info: Local Addr:{:?}, Peer Addr:{:?}", tcp_stream.local_addr()?, tcp_stream.peer_addr()?);
+                info!(
+                    "TcpStream info: Local Addr:{:?}, Peer Addr:{:?}",
+                    tcp_stream.local_addr()?,
+                    tcp_stream.peer_addr()?
+                );
                 Ok(Self { tcp_stream })
             }
             Err(error) => Err(error),

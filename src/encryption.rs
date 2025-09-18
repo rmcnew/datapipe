@@ -3,15 +3,15 @@ use chacha20poly1305::aead::stream::{self, DecryptorBE32, EncryptorBE32};
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use log::{error, trace, warn};
 
-// This stream encryption library appends a 16-byte authentication tag to the end of the 
-// encrypted message.  We use the following static tag to start each message in the 
+// This stream encryption library appends a 16-byte authentication tag to the end of the
+// encrypted message.  We use the following static tag to start each message in the
 // encrypted stream, followed by a variable-byte length that gives the length of the encrypted
-// message data AND the 16-byte authentication tag.  Thus each message in the encypted 
+// message data AND the 16-byte authentication tag.  Thus each message in the encypted
 // stream has the following structure:
 // [MESSAGE_START][MESSAGE_LENGTH][encrypted message][authentication tag]
 pub const MESSAGE_START: [u8; 4] = [0x29, 0x16, 0x4B, 0x74];
 const MESSAGE_START_LENGTH: usize = 4;
-const MIN_PREFIX_LENGTH: usize = 5;  // MESSAGE_START length + minimum MessageLength length
+const MIN_PREFIX_LENGTH: usize = 5; // MESSAGE_START length + minimum MessageLength length
 
 #[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Decoded<T: Sized> {
@@ -33,11 +33,10 @@ fn test_message_length_encode_decode() {
     assert_eq!(message_length, decoded);
 }
 
-
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MessageLength {
-    pub length_length: usize, // how many bytes does the length use?
-    pub message_length: usize,  // how many bytes does the respective value use?
+    pub length_length: usize,  // how many bytes does the length use?
+    pub message_length: usize, // how many bytes does the respective value use?
 }
 
 impl MessageLength {
@@ -104,7 +103,7 @@ impl MessageLength {
             // when we go to 128-bit machines, more branches might be needed here
             _ => {
                 panic!("Out of bounds MessageLength representation!");
-            } 
+            }
         }
         bytes
     }
@@ -563,8 +562,10 @@ fn test_encrypt_decrypt() {
     let mut decryptor = StreamDecryptor::new(key.clone()).unwrap();
 
     let plain = "There once was a ship that put to sea; The name of the ship was the Billy of Tea; The winds blew up, her bow dipped down; blow, me bully boys, blow.".to_string();
-    let mut plain_clone = plain.clone();  // keep original to compare against
-    let mut cipher = encryptor.encrypt(unsafe { plain_clone.as_mut_vec() } ).unwrap();
+    let mut plain_clone = plain.clone(); // keep original to compare against
+    let mut cipher = encryptor
+        .encrypt(unsafe { plain_clone.as_mut_vec() })
+        .unwrap();
     let plain2 = String::from_utf8(decryptor.decrypt(&mut cipher).unwrap()).unwrap();
     assert_eq!(plain, plain2);
 }
@@ -577,7 +578,8 @@ impl StreamEncryptor {
     pub fn new(encryption_key: EncryptionKey) -> Result<Self, DatapipeError> {
         match XChaCha20Poly1305::new_from_slice(&encryption_key.key) {
             Ok(aead) => {
-                let encryptor = stream::EncryptorBE32::from_aead(aead, &encryption_key.nonce.into());
+                let encryptor =
+                    stream::EncryptorBE32::from_aead(aead, &encryption_key.nonce.into());
                 Ok(Self { encryptor })
             }
             Err(error) => {
@@ -593,16 +595,16 @@ impl StreamEncryptor {
         let clear_data_length = clear_data.len();
         trace!("clear_data length is: {clear_data_length}");
         if clear_data.is_empty() {
-            return Ok(Vec::new());
+            Ok(Vec::new())
         } else {
             let mut message = Vec::new();
             message.extend_from_slice(&MESSAGE_START[..]);
-            let payload: Vec<u8> = clear_data.drain(0..).collect();
+            let payload: Vec<u8> = std::mem::take(clear_data);
             let mut cipher_data = self.encryptor.encrypt_next(&payload[..])?;
             let cipher_data_message_length = MessageLength::new(cipher_data.len());
             message.append(&mut cipher_data_message_length.encode());
             message.append(&mut cipher_data);
-            return Ok(message);
+            Ok(message)
         }
     }
 }
@@ -615,7 +617,8 @@ impl StreamDecryptor {
     pub fn new(encryption_key: EncryptionKey) -> Result<Self, DatapipeError> {
         match XChaCha20Poly1305::new_from_slice(&encryption_key.key) {
             Ok(aead) => {
-                let decryptor = stream::DecryptorBE32::from_aead(aead, &encryption_key.nonce.into());
+                let decryptor =
+                    stream::DecryptorBE32::from_aead(aead, &encryption_key.nonce.into());
                 Ok(Self { decryptor })
             }
             Err(error) => {
@@ -641,30 +644,33 @@ impl StreamDecryptor {
                             return Ok(Vec::new());
                         }
                         let message: Vec<u8> = cipher_data.drain(0..end).collect();
-                        trace!("Draining {end} bytes from cipher_data; cipher_data length is now: {}", cipher_data.len());
+                        trace!(
+                            "Draining {end} bytes from cipher_data; cipher_data length is now: {}",
+                            cipher_data.len()
+                        );
                         let clear_data = self.decryptor.decrypt_next(&message[start..end])?;
-                        return Ok(clear_data);
+                        Ok(clear_data)
                     }
                     None => {
-                        let error_message = format!("Could not decode encrypted message length!");
+                        let error_message =
+                            "Could not decode encrypted message length!".to_string();
                         error!("{error_message}");
-                        return Err(DatapipeError::EncryptionError(error_message));
+                        Err(DatapipeError::EncryptionError(error_message))
                     }
                 }
             } else {
                 // MESSAGE_START does not match
-                let error_message = format!("Encrypted message start sequence does not match!");
+                let error_message = "Encrypted message start sequence does not match!".to_string();
                 error!("{error_message}");
-                return Err(DatapipeError::EncryptionError(error_message));
+                Err(DatapipeError::EncryptionError(error_message))
             }
-        } else { 
+        } else {
             // cipher_data is too short
-            let warn_message = format!("Encrypted message is too short to decrypt!");
+            let warn_message = "Encrypted message is too short to decrypt!".to_string();
             warn!("{warn_message}");
-            return Ok(Vec::new());
+            Ok(Vec::new())
         }
     }
-
 
     /// note that this consumes as much of the contents of cipher_data as possible
     pub fn decrypt(&mut self, cipher_data: &mut Vec<u8>) -> Result<Vec<u8>, DatapipeError> {

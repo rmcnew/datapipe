@@ -17,3 +17,9 @@ impl OutputWriter for StdoutWriter {
         tokio::io::stdout().write_all(bytes).await
     }
 }
+
+impl Default for StdoutWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}

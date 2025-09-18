@@ -105,7 +105,6 @@ impl std::convert::From<TlsListenReader> for Reader {
     }
 }
 
-
 /// Convert a UdpReader to a Reader
 impl std::convert::From<UdpReader> for Reader {
     fn from(value: UdpReader) -> Self {

@@ -1,7 +1,7 @@
 // various utilities
 use crate::datapipe_types::DatapipeError;
 use rand::distr::Uniform;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::path::Path;
 use std::string::ToString;
 use tokio::net::TcpSocket;
@@ -17,7 +17,8 @@ async fn test_get_unused_port() {
 /// see if a port is in use; used in testing, so minimal error handling
 pub fn port_available(port: u16) -> bool {
     let result: bool;
-    { // use an explicit scope so the socket is dropped
+    {
+        // use an explicit scope so the socket is dropped
         let addr = format!("127.0.0.1:{}", port).parse().unwrap();
         let socket = TcpSocket::new_v4().unwrap();
         // set socket options so the port is available as soon as possible
@@ -45,7 +46,7 @@ pub fn port_available(port: u16) -> bool {
 
 const MAX_RETRY: u8 = 16;
 const PORT_SEARCH_START: u16 = 24_000;
-const PORT_SEARCH_END: u16 = 64_000; 
+const PORT_SEARCH_END: u16 = 64_000;
 
 /// find an unused IP port
 pub async fn get_unused_port() -> Option<u16> {
@@ -53,7 +54,7 @@ pub async fn get_unused_port() -> Option<u16> {
     for _ in 0..MAX_RETRY {
         let port = rng().sample(range);
         if port_available(port) {
-            // short wait to allow port to be available; 
+            // short wait to allow port to be available;
             // on some systems, it takes a bit longer for the socket to be ready for use
             // and trying to use it immediately gives a 'port already in use' error
             tokio::time::sleep(std::time::Duration::from_millis(750)).await;
@@ -81,24 +82,21 @@ fn test_utilities_misc_hostname() {
 pub fn hostname() -> String {
     match std::env::var("HOSTNAME") {
         Ok(hostname) => hostname,
-        Err(error) => {
-            match error {
-                std::env::VarError::NotPresent => {
-                    match std::env::var("COMPUTERNAME") {
-                        Ok(hostname) => hostname,
-                        Err(_error) => "localhost".to_string()
-                    }
-                }
-                _ => {
-                    "localhost".to_string()
-                }
-            }
-        }
+        Err(error) => match error {
+            std::env::VarError::NotPresent => match std::env::var("COMPUTERNAME") {
+                Ok(hostname) => hostname,
+                Err(_error) => "localhost".to_string(),
+            },
+            _ => "localhost".to_string(),
+        },
     }
 }
 
 /// compare file contents
-pub async fn identical_contents(file1: impl AsRef<Path>, file2: impl AsRef<Path>) -> Result<bool, DatapipeError> {
+pub async fn identical_contents(
+    file1: impl AsRef<Path>,
+    file2: impl AsRef<Path>,
+) -> Result<bool, DatapipeError> {
     let contents1 = tokio::fs::read(file1).await?;
     let contents2 = tokio::fs::read(file2).await?;
     Ok(contents1 == contents2)

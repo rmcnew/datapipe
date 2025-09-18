@@ -46,7 +46,7 @@ impl InputReader for HttpReader {
                                     error
                                 );
                                 error!("{}", error_message);
-                                Err(Error::new(ErrorKind::Other, error_message))
+                                Err(Error::other(error_message))
                             }
                         }
                     }
@@ -59,13 +59,13 @@ impl InputReader for HttpReader {
                                     res
                                 );
                                 error!("{}", error_message);
-                                Err(Error::new(ErrorKind::Other, error_message))
+                                Err(Error::other(error_message))
                             }
                             Err(error) => {
                                 let error_message =
                                     format!("HttpInput:  decoded web server status: {}", error);
                                 error!("{}", error_message);
-                                Err(Error::new(ErrorKind::Other, error_message))
+                                Err(Error::other(error_message))
                             }
                         }
                     }

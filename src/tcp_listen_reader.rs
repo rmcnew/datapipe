@@ -1,7 +1,7 @@
+use crate::datapipe_types::InputReader;
 /// "Listen for connection, then receive" Reader for TCP
 use bytes::Bytes;
 use core::net::SocketAddr;
-use crate::datapipe_types::InputReader;
 use log::{error, info};
 use std::io::{Error, ErrorKind};
 use tokio::io::AsyncReadExt;
@@ -39,7 +39,11 @@ impl InputReader for TcpListenReader {
             match self.tcp_listener.accept().await {
                 Ok((tcp_stream, addr)) => {
                     info!("Connection from {} accepted", addr);
-                    info!("TcpStream info: Local Addr:{:?}, Peer Addr:{:?}", tcp_stream.local_addr()?, tcp_stream.peer_addr()?);
+                    info!(
+                        "TcpStream info: Local Addr:{:?}, Peer Addr:{:?}",
+                        tcp_stream.local_addr()?,
+                        tcp_stream.peer_addr()?
+                    );
                     self.maybe_tcp_stream = Some(tcp_stream);
                 }
                 Err(error) => {

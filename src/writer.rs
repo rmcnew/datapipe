@@ -16,7 +16,7 @@ pub enum Writer {
     Https(HttpsWriter),
     Stdout(StdoutWriter),
     Tcp(TcpReaderWriter),
-    Tls(TlsReaderWriter),
+    Tls(Box<TlsReaderWriter>),
     Udp(UdpWriter),
 }
 
@@ -80,7 +80,7 @@ impl std::convert::From<TcpReaderWriter> for Writer {
 /// Convert a TlsReaderWriter to a Writer
 impl std::convert::From<TlsReaderWriter> for Writer {
     fn from(value: TlsReaderWriter) -> Self {
-        Self::Tls(value)
+        Self::Tls(Box::new(value))
     }
 }
 

@@ -21,6 +21,7 @@ impl HttpsWriter {
     pub const DEFAULT_DELIMITER: [u8; 1] = [b'\n'];
     pub const DEFAULT_WRITE_RATE: Duration = Duration::from_secs(5);
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         https_output_url: &str,
         https_output_delimiter: Vec<u8>,
@@ -38,17 +39,16 @@ impl HttpsWriter {
             .user_agent("datapipe")
             .tls_built_in_root_certs(true) // enable system root certs
             .tls_built_in_webpki_certs(true); // enable webpki root certs
-        if maybe_root_certs.is_some() {
-            let certs = maybe_root_certs.unwrap();
-            for cert in certs {
+        if let Some(root_certs) = maybe_root_certs {
+            for cert in root_certs {
                 client_builder = client_builder.add_root_certificate(cert);
             }
         }
-        if maybe_crls.is_some() {
-            client_builder = client_builder.add_crls(maybe_crls.unwrap());
+        if let Some(crls) = maybe_crls {
+            client_builder = client_builder.add_crls(crls);
         }
-        if maybe_identity.is_some() {
-            client_builder = client_builder.identity(maybe_identity.unwrap());
+        if let Some(identity) = maybe_identity {
+            client_builder = client_builder.identity(identity);
         }
         if allow_invalid_hostnames {
             client_builder = client_builder.danger_accept_invalid_hostnames(true);
@@ -107,7 +107,7 @@ impl HttpsWriter {
 
     async fn send_payload(&mut self) -> Result<(), Error> {
         // grab payload and replace it with an empty one
-        let payload = std::mem::replace(&mut self.payload, Vec::new());
+        let payload = std::mem::take(&mut self.payload);
         // send payload
         match self
             .client
@@ -139,7 +139,7 @@ impl OutputWriter for HttpsWriter {
         }
         self.write_interval.tick().await; // wait until it is time to read
         // if last_output was older than output_rate and there is data to send
-        if self.payload.len() > 0 {
+        if !self.payload.is_empty() {
             self.send_payload().await?;
         }
         Ok(())
