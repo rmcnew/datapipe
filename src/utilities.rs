@@ -26,7 +26,6 @@ pub fn port_available(port: u16) -> bool {
         #[cfg(not(windows))]
         socket.set_reuseport(true).unwrap();
         socket.set_keepalive(false).unwrap();
-        socket.set_linger(None).unwrap();
         match socket.bind(addr) {
             Ok(()) => match socket.local_addr() {
                 Ok(_address) => {
