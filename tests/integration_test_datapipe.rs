@@ -31,15 +31,20 @@ fn get_temp_dir() -> PathBuf {
 }
 
 #[cfg(test)]
-async fn run_datapipe(args: Vec<String>) {
+async fn run_datapipe_status(args: &[String]) -> std::process::ExitStatus {
     let datapipe_pathbuf = get_datapipe_binary().unwrap();
-    let exit_status = Command::new(datapipe_pathbuf)
-        .args(&args)
+    Command::new(datapipe_pathbuf)
+        .args(args)
         .spawn()
         .unwrap()
         .wait()
         .await
-        .unwrap();
+        .unwrap()
+}
+
+#[cfg(test)]
+async fn run_datapipe(args: Vec<String>) {
+    let exit_status = run_datapipe_status(&args).await;
     assert!(exit_status.success());
 }
 
@@ -105,6 +110,7 @@ async fn integration_test_uucp_file() {
         //"--keep-logs".to_string(),
     ];
     children.push(tokio::spawn(run_datapipe(args2)));
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     children.push(tokio::spawn(run_datapipe(args1)));
     for child in children {
         match child.await {
@@ -165,6 +171,7 @@ async fn integration_test_weak_scp_file() {
         //"--keep-logs".to_string(),
     ];
     children.push(tokio::spawn(run_datapipe(args2)));
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     children.push(tokio::spawn(run_datapipe(args1)));
     for child in children {
         match child.await {
@@ -248,4 +255,118 @@ async fn integration_test_strong_scp_file() {
     );
     // delete the output file
     remove_file(&output_file_path).await.unwrap();
+}
+
+#[tokio::test]
+async fn integration_test_verify_config_valid() {
+    let test_document_pathbuf = get_test_document().unwrap();
+    let temp_dir_pathbuf = get_temp_dir();
+    let config_path = temp_dir_pathbuf.join(format!("{}.toml", generate_random_string(16)));
+    let output_file_path = temp_dir_pathbuf.join(format!("{}.pdf", generate_random_string(16)));
+
+    let toml_content = format!(
+        "[input]\nfile_input = {:?}\n\n[output]\nfile_output = {:?}\n",
+        test_document_pathbuf, output_file_path
+    );
+    tokio::fs::write(&config_path, toml_content).await.unwrap();
+
+    let args = vec![
+        "--verify-config".to_string(),
+        config_path.to_str().unwrap().to_string(),
+    ];
+    let status = run_datapipe_status(&args).await;
+    assert!(status.success());
+
+    remove_file(&config_path).await.unwrap();
+}
+
+#[tokio::test]
+async fn integration_test_verify_config_invalid() {
+    let temp_dir_pathbuf = get_temp_dir();
+    let config_path = temp_dir_pathbuf.join(format!("{}.toml", generate_random_string(16)));
+
+    // Missing output destination
+    let toml_content = "[input]\nfile_input = \"some_file.dat\"\n";
+    tokio::fs::write(&config_path, toml_content).await.unwrap();
+
+    let args = vec![
+        "--verify-config".to_string(),
+        config_path.to_str().unwrap().to_string(),
+    ];
+    let status = run_datapipe_status(&args).await;
+    assert!(!status.success());
+
+    remove_file(&config_path).await.unwrap();
+}
+
+#[tokio::test]
+async fn integration_test_save_to_config() {
+    let test_document_pathbuf = get_test_document().unwrap();
+    let temp_dir_pathbuf = get_temp_dir();
+    let config_path = temp_dir_pathbuf.join(format!("{}.toml", generate_random_string(16)));
+    let output_file_path = temp_dir_pathbuf.join(format!("{}.pdf", generate_random_string(16)));
+
+    let args = vec![
+        "--file-input".to_string(),
+        test_document_pathbuf.to_str().unwrap().to_string(),
+        "--file-output".to_string(),
+        output_file_path.to_str().unwrap().to_string(),
+        "--save-to-config".to_string(),
+        config_path.to_str().unwrap().to_string(),
+    ];
+    let status = run_datapipe_status(&args).await;
+    assert!(status.success());
+    assert!(config_path.exists());
+
+    // Verify the saved configuration file is valid
+    let verify_args = vec![
+        "--verify-config".to_string(),
+        config_path.to_str().unwrap().to_string(),
+    ];
+    let verify_status = run_datapipe_status(&verify_args).await;
+    assert!(verify_status.success());
+
+    remove_file(&config_path).await.unwrap();
+}
+
+#[tokio::test]
+async fn integration_test_use_config_file_copy() {
+    let test_document_pathbuf = get_test_document().unwrap();
+    let temp_dir_pathbuf = get_temp_dir();
+    let config_path = temp_dir_pathbuf.join(format!("{}.toml", generate_random_string(16)));
+    let output_file_path = temp_dir_pathbuf.join(format!("{}.pdf", generate_random_string(16)));
+
+    let toml_content = format!(
+        "[input]\nfile_input = {:?}\n\n[output]\nfile_output = {:?}\n",
+        test_document_pathbuf, output_file_path
+    );
+    tokio::fs::write(&config_path, toml_content).await.unwrap();
+
+    let args = vec![
+        "--use-config".to_string(),
+        config_path.to_str().unwrap().to_string(),
+    ];
+    run_datapipe(args).await;
+
+    assert!(output_file_path.exists());
+    assert!(
+        identical_contents(&test_document_pathbuf, &output_file_path)
+            .await
+            .unwrap()
+    );
+
+    remove_file(&config_path).await.unwrap();
+    remove_file(&output_file_path).await.unwrap();
+}
+
+#[tokio::test]
+async fn integration_test_config_mutual_exclusion() {
+    let args = vec![
+        "--use-config".to_string(),
+        "config_a.toml".to_string(),
+        "--verify-config".to_string(),
+        "config_b.toml".to_string(),
+    ];
+    let status = run_datapipe_status(&args).await;
+    assert!(!status.success());
 }

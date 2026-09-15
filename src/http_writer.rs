@@ -18,7 +18,7 @@ pub struct HttpWriter {
 }
 
 impl HttpWriter {
-    pub const DEFAULT_DELIMITER: [u8; 1] = [b'\n'];
+    pub const DEFAULT_DELIMITER: [u8; 1] = *b"\n";
     pub const DEFAULT_WRITE_RATE: Duration = Duration::from_secs(5);
 
     pub fn new(

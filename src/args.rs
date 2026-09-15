@@ -23,6 +23,7 @@ use rcgen::{CertifiedKey, generate_simple_self_signed};
 use reqwest::{Certificate, Identity, tls::CertificateRevocationList};
 use rustls::pki_types::pem::PemObject;
 use rustls_pemfile::{certs, private_key};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -42,8 +43,9 @@ use tokio_rustls::rustls::{
 use webpki_roots::TLS_SERVER_ROOTS;
 
 /// Choose one input source
-#[derive(Args, Debug, Clone)]
-#[group(required = true, multiple = false)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[group(required = false, multiple = false)]
+#[serde(default)]
 pub struct InputArgs {
     /// read data from a file
     #[arg(long = "file-input")]
@@ -79,8 +81,9 @@ pub struct InputArgs {
 }
 
 /// Additional parameters for HTTP input
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
+#[serde(default)]
 pub struct HttpInputArgs {
     /// read rate in milliseconds, how often should the input web address be polled?
     #[arg(long = "http-input-rate")]
@@ -88,8 +91,9 @@ pub struct HttpInputArgs {
 }
 
 /// Additional parameters for HTTPS input
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
+#[serde(default)]
 pub struct HttpsInputArgs {
     /// read rate in milliseconds, how often should the input web address be polled?
     #[arg(long = "https-input-rate")]
@@ -115,8 +119,9 @@ pub struct HttpsInputArgs {
 }
 
 /// Additional parameters needed for TLS input
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
+#[serde(default)]
 pub struct TlsInputArgs {
     /// path to custom TLS certificate chain file to use.  Certificates must be in DER format.
     #[arg(long = "tls-input-cert-chain")]
@@ -133,8 +138,9 @@ pub struct TlsInputArgs {
 }
 
 /// Additional parameters needed for TLS listen input
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
+#[serde(default)]
 pub struct TlsListenInputArgs {
     /// path to custom TLS certificate chain file to use.  Certificates must be in DER format.
     #[arg(long = "tls-listen-input-cert-chain")]
@@ -154,8 +160,9 @@ pub struct TlsListenInputArgs {
 }
 
 /// Additional parameters for decrypting input
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = false)]
+#[serde(default)]
 pub struct DecryptionArgs {
     /// decryption key to use after reading data; must be exactly 51 bytes long
     #[arg(long = "decrypt")]
@@ -163,8 +170,9 @@ pub struct DecryptionArgs {
 }
 
 /// Additional parameters for encrypting output
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = false)]
+#[serde(default)]
 pub struct EncryptionArgs {
     /// encryption key to use before writing data; must be exactly 51 bytes long
     #[arg(long = "encrypt")]
@@ -175,8 +183,9 @@ pub struct EncryptionArgs {
 }
 
 /// Choose one or more output destinations
-#[derive(Args, Debug, Clone)]
-#[group(required = true, multiple = true)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[group(required = false, multiple = true)]
+#[serde(default)]
 pub struct OutputArgs {
     /// write data to a file
     #[arg(long = "file-output")]
@@ -202,8 +211,9 @@ pub struct OutputArgs {
 }
 
 /// Additional parameters needed for HTTP output
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
+#[serde(default)]
 pub struct HttpOutputArgs {
     /// write rate in milliseconds, how often should data be sent to the output web address?
     #[arg(long = "http-output-rate")]
@@ -217,8 +227,9 @@ pub struct HttpOutputArgs {
 }
 
 /// Additional parameters for HTTPS output
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
+#[serde(default)]
 pub struct HttpsOutputArgs {
     /// write rate in milliseconds, how often should data be sent to the output web address?
     #[arg(long = "https-output-rate")]
@@ -250,8 +261,9 @@ pub struct HttpsOutputArgs {
 }
 
 /// Additional parameters needed for TLS output
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
+#[serde(default)]
 pub struct TlsOutputArgs {
     /// path to custom TLS certificate chain file to use
     #[arg(long = "tls-output-cert-chain")]
@@ -268,8 +280,9 @@ pub struct TlsOutputArgs {
 }
 
 /// Logging parameters
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
+#[serde(default)]
 pub struct LoggingArgs {
     /// should logs be kept after the program exits?  defaults to false
     #[arg(long = "keep-logs", default_value_t = false)]
@@ -279,9 +292,143 @@ pub struct LoggingArgs {
     pub log_dir: Option<String>,
 }
 
+impl InputArgs {
+    /// Returns true if no input source fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.file_input.is_none()
+            && self.http_input.is_none()
+            && self.https_input.is_none()
+            && !self.stdin_input
+            && self.tcp_input.is_none()
+            && self.tcp_listen_input.is_none()
+            && self.tls_input.is_none()
+            && self.tls_listen_input.is_none()
+            && self.udp_input.is_none()
+            && self.udp_multicast_input.is_none()
+    }
+}
+
+impl HttpInputArgs {
+    /// Returns true if no HTTP input fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.http_input_rate.is_none()
+    }
+}
+
+impl HttpsInputArgs {
+    /// Returns true if no HTTPS input fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.https_input_rate.is_none()
+            && self.https_input_root_certificates.is_none()
+            && self.https_input_certificate_revocation_list.is_none()
+            && self.https_input_client_identity.is_none()
+            && !self.https_input_allow_invalid_hostnames
+            && !self.https_input_allow_invalid_certificates
+    }
+}
+
+impl TlsInputArgs {
+    /// Returns true if no TLS input fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.tls_input_cert_chain.is_none()
+            && self.tls_input_client_key.is_none()
+            && self.tls_input_root_ca.is_none()
+            && !self.tls_input_skip_server_verify
+    }
+}
+
+impl TlsListenInputArgs {
+    /// Returns true if no TLS listen input fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.tls_listen_input_cert_chain.is_none()
+            && self.tls_listen_input_server_key.is_none()
+            && !self.tls_listen_input_skip_client_verify
+            && !self.tls_listen_input_generate_self_signed
+    }
+}
+
+impl DecryptionArgs {
+    /// Returns true if no decryption fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.decryption_key.is_none()
+    }
+}
+
+impl EncryptionArgs {
+    /// Returns true if no encryption fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.encryption_key.is_none() && !self.generate_encryption_key
+    }
+}
+
+impl OutputArgs {
+    /// Returns true if no output destination fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.file_output.is_none()
+            && self.http_output.is_none()
+            && self.https_output.is_none()
+            && !self.stdout_output
+            && self.tcp_output.is_none()
+            && self.tls_output.is_none()
+            && self.udp_output.is_none()
+    }
+}
+
+impl HttpOutputArgs {
+    /// Returns true if no HTTP output fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.http_output_rate.is_none()
+            && self.http_output_delimiter.is_none()
+            && self.http_output_include_delimiter
+    }
+}
+
+impl HttpsOutputArgs {
+    /// Returns true if no HTTPS output fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.https_output_rate.is_none()
+            && self.https_output_delimiter.is_none()
+            && self.https_output_include_delimiter.is_none()
+            && self.https_output_root_certificates.is_none()
+            && self.https_output_certificate_revocation_list.is_none()
+            && self.https_output_client_identity.is_none()
+            && !self.https_output_allow_invalid_hostnames
+            && !self.https_output_allow_invalid_certificates
+    }
+}
+
+impl TlsOutputArgs {
+    /// Returns true if no TLS output fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.tls_output_cert_chain.is_none()
+            && self.tls_output_client_key.is_none()
+            && self.tls_output_root_ca.is_none()
+            && !self.tls_output_skip_server_verify
+    }
+}
+
+impl LoggingArgs {
+    /// Returns true if default logging fields are configured
+    pub fn is_empty(&self) -> bool {
+        !self.keep_logs && self.log_dir.is_none()
+    }
+}
+
 /// Overall command line args
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Clone, PartialEq, Default)]
 pub struct ProgramArgs {
+    /// Start datapipe using a configuration file
+    #[arg(long = "use-config", group = "config_action")]
+    pub use_config: Option<PathBuf>,
+
+    /// Save the given datapipe command line parameters to a configuration file
+    #[arg(long = "save-to-config", group = "config_action")]
+    pub save_to_config: Option<PathBuf>,
+
+    /// Check that the provided configuration file is a valid datapipe configuration file
+    #[arg(long = "verify-config", group = "config_action")]
+    pub verify_config: Option<PathBuf>,
+
     #[command(flatten)]
     pub input: InputArgs,
     #[command(flatten)]
@@ -309,6 +456,54 @@ pub struct ProgramArgs {
 }
 
 impl ProgramArgs {
+    /// Returns true if any command-line input or output arguments were provided
+    pub fn has_cli_io(&self) -> bool {
+        !self.input.is_empty() || !self.output.is_empty()
+    }
+
+    /// Validate the program arguments according to CLI requirements
+    pub fn validate(&self) -> Result<(), DatapipeError> {
+        if self.verify_config.is_some() {
+            if self.has_cli_io() {
+                let error_message =
+                    "--verify-config cannot be combined with command-line input/output arguments"
+                        .to_string();
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
+            return Ok(());
+        }
+
+        if self.use_config.is_some() {
+            if self.has_cli_io() {
+                let error_message =
+                    "--use-config cannot be combined with command-line input/output arguments"
+                        .to_string();
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
+            return Ok(());
+        }
+
+        if self.input.is_empty() {
+            let error_message =
+                "No input source provided! Please configure an input source or use --use-config."
+                    .to_string();
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+
+        if self.output.is_empty() {
+            let error_message =
+                "No output destination provided! Please configure an output destination."
+                    .to_string();
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+
+        Ok(())
+    }
+
     /// Ensure that the input reader is set only once
     fn check_reader_set(maybe_reader: &Option<Reader>) -> Result<(), DatapipeError> {
         match maybe_reader.as_ref() {
@@ -335,17 +530,20 @@ impl ProgramArgs {
     /// Prepare a reader for HTTP input
     fn handle_http_input(&self) -> Result<Reader, DatapipeError> {
         let url = self.input.http_input.as_ref().unwrap(); // is_some checked in parent function
-        let update_rate;
-        if self.http_input.http_input_rate.is_some() {
-            update_rate = self.http_input.http_input_rate.unwrap();
-            info!("Using HTTP input rate of {} milliseconds", update_rate);
-        } else {
-            update_rate = HttpReader::DEFAULT_UPDATE_RATE;
-            info!(
-                "Using default HTTP input rate of {} milliseconds",
-                update_rate
-            );
-        }
+        let update_rate = match self.http_input.http_input_rate {
+            Some(rate) => {
+                info!("Using HTTP input rate of {} milliseconds", rate);
+                rate
+            }
+            None => {
+                let default_rate = HttpReader::DEFAULT_UPDATE_RATE;
+                info!(
+                    "Using default HTTP input rate of {} milliseconds",
+                    default_rate
+                );
+                default_rate
+            }
+        };
         let http_reader = HttpReader::new(url, update_rate)?;
         info!("Using HTTP input");
         Ok(Reader::Http(http_reader))
@@ -353,7 +551,7 @@ impl ProgramArgs {
 
     /// Prepare a reader for HTTPS input
     async fn handle_https_input(&self) -> Result<Reader, DatapipeError> {
-        let url = self.input.https_input.as_ref().unwrap(); // is_some checked in parent function    
+        let url = self.input.https_input.as_ref().unwrap(); // is_some checked in parent function
         let maybe_root_certs;
         let maybe_crls;
         let maybe_identity;
@@ -361,11 +559,9 @@ impl ProgramArgs {
         let allow_invalid_hostnames = self.https_input.https_input_allow_invalid_hostnames;
         let allow_invalid_certs = self.https_input.https_input_allow_invalid_certificates;
 
-        let read_rate = if self.https_input.https_input_rate.is_some() {
-            let read_rate_millis = self.https_input.https_input_rate.unwrap();
-            Duration::from_millis(read_rate_millis)
-        } else {
-            HttpsReader::DEFAULT_READ_RATE
+        let read_rate = match self.https_input.https_input_rate {
+            Some(rate_millis) => Duration::from_millis(rate_millis),
+            None => HttpsReader::DEFAULT_READ_RATE,
         };
 
         if self.https_input.https_input_root_certificates.is_some() {
@@ -472,7 +668,7 @@ impl ProgramArgs {
             Ok(tcp_reader) => Ok(Reader::Tcp(tcp_reader)),
             Err(error) => {
                 let error_message =
-                    format!("TCP input error {}: {}", &address, error_root_cause(&error));
+                    format!("TCP input error {}: {}", address, error_root_cause(&error));
                 error!("{error_message}");
                 Err(DatapipeError::InputOutputError(error_message))
             }
@@ -486,7 +682,7 @@ impl ProgramArgs {
             Err(error) => {
                 let error_message = format!(
                     "TCP listen input error {}: {}",
-                    &address,
+                    address,
                     error_root_cause(&error)
                 );
                 error!("{error_message}");
@@ -505,7 +701,7 @@ impl ProgramArgs {
                 }
                 Err(error) => {
                     let error_message =
-                        format!("TLS input error {}: {}", &address, error_root_cause(&error));
+                        format!("TLS input error {}: {}", address, error_root_cause(&error));
                     error!("{error_message}");
                     Err(DatapipeError::InputOutputError(error_message))
                 }
@@ -521,11 +717,8 @@ impl ProgramArgs {
     fn setup_root_cert_store(&self) -> Result<RootCertStore, DatapipeError> {
         // setup root cert store
         let mut root_cert_store = RootCertStore::empty();
-        if self.tls_input.tls_input_root_ca.is_some() {
-            match get_root_ca(
-                self.tls_input.tls_input_root_ca.as_ref().unwrap(),
-                &mut root_cert_store,
-            ) {
+        if let Some(ref root_ca) = self.tls_input.tls_input_root_ca {
+            match get_root_ca(root_ca, &mut root_cert_store) {
                 Ok(()) => {} // no issues loading CA roots
                 Err(error) => {
                     let error_message = format!(
@@ -795,7 +988,7 @@ impl ProgramArgs {
                 Err(error) => {
                     let error_message = format!(
                         "TLS listen input error {}: {}",
-                        &address,
+                        address,
                         error_root_cause(&error)
                     );
                     error!("{error_message}");
@@ -822,7 +1015,7 @@ impl ProgramArgs {
             Err(error) => {
                 let error_message = format!(
                     "Cannot open input UDP address {:?}: {}",
-                    &address,
+                    address,
                     error_root_cause(&error)
                 );
                 error!("{error_message}");
@@ -842,7 +1035,7 @@ impl ProgramArgs {
             Err(error) => {
                 let error_message = format!(
                     "Cannot open input UDP multicast address {:?}: {}",
-                    &address,
+                    address,
                     error_root_cause(&error)
                 );
                 error!("{error_message}");
@@ -925,20 +1118,14 @@ impl ProgramArgs {
 
     fn handle_http_output(&self) -> Result<Writer, DatapipeError> {
         let url = self.output.http_output.as_ref().unwrap();
-        let delimiter: Vec<u8> = if self.http_output.http_output_delimiter.is_some() {
-            self.http_output
-                .http_output_delimiter
-                .as_ref()
-                .unwrap()
-                .to_vec()
-        } else {
-            HttpWriter::DEFAULT_DELIMITER.to_vec()
+        let delimiter: Vec<u8> = match self.http_output.http_output_delimiter {
+            Some(ref d) => d.clone(),
+            None => HttpWriter::DEFAULT_DELIMITER.to_vec(),
         };
         let include_delimiter = self.http_output.http_output_include_delimiter;
-        let output_rate: Duration = if self.http_output.http_output_rate.is_some() {
-            Duration::from_millis(self.http_output.http_output_rate.unwrap())
-        } else {
-            HttpWriter::DEFAULT_WRITE_RATE
+        let output_rate: Duration = match self.http_output.http_output_rate {
+            Some(rate_millis) => Duration::from_millis(rate_millis),
+            None => HttpWriter::DEFAULT_WRITE_RATE,
         };
         match HttpWriter::new(url, delimiter, include_delimiter, output_rate) {
             Ok(http_writer) => {
@@ -946,8 +1133,7 @@ impl ProgramArgs {
                 Ok(Writer::Http(http_writer))
             }
             Err(error) => {
-                let error_message =
-                    format!("HTTP URL error {}: {}", &url, error_root_cause(&error));
+                let error_message = format!("HTTP URL error {}: {}", url, error_root_cause(&error));
                 error!("{error_message}");
                 Err(DatapipeError::InputOutputError(error_message))
             }
@@ -955,7 +1141,7 @@ impl ProgramArgs {
     }
 
     async fn handle_https_output(&self) -> Result<Writer, DatapipeError> {
-        let url = self.output.http_output.as_ref().unwrap();
+        let url = self.output.https_output.as_ref().unwrap();
 
         let maybe_root_certs: Option<Vec<Certificate>>;
         let maybe_crls: Option<Vec<CertificateRevocationList>>;
@@ -964,21 +1150,14 @@ impl ProgramArgs {
         let allow_invalid_hostnames = self.https_output.https_output_allow_invalid_hostnames;
         let allow_invalid_certs = self.https_output.https_output_allow_invalid_certificates;
 
-        let write_rate = if self.https_output.https_output_rate.is_some() {
-            let write_rate_millis = self.https_output.https_output_rate.unwrap();
-            Duration::from_millis(write_rate_millis)
-        } else {
-            HttpsWriter::DEFAULT_WRITE_RATE
+        let write_rate = match self.https_output.https_output_rate {
+            Some(rate_millis) => Duration::from_millis(rate_millis),
+            None => HttpsWriter::DEFAULT_WRITE_RATE,
         };
 
-        let delimiter: Vec<u8> = if self.https_output.https_output_delimiter.is_some() {
-            self.https_output
-                .https_output_delimiter
-                .as_ref()
-                .unwrap()
-                .to_vec()
-        } else {
-            HttpsWriter::DEFAULT_DELIMITER.to_vec()
+        let delimiter: Vec<u8> = match self.https_output.https_output_delimiter {
+            Some(ref d) => d.clone(),
+            None => HttpsWriter::DEFAULT_DELIMITER.to_vec(),
         };
 
         let include_delimiter = self
@@ -1083,7 +1262,7 @@ impl ProgramArgs {
             Err(error) => {
                 let error_message = format!(
                     "HTTPS output URL error {}: {}",
-                    &url,
+                    url,
                     error_root_cause(&error)
                 );
                 error!("{error_message}");
@@ -1102,11 +1281,8 @@ impl ProgramArgs {
         match TcpReaderWriter::new(address).await {
             Ok(tcp_writer) => Ok(Writer::Tcp(tcp_writer)),
             Err(error) => {
-                let error_message = format!(
-                    "TCP output error {}: {}",
-                    &address,
-                    error_root_cause(&error)
-                );
+                let error_message =
+                    format!("TCP output error {}: {}", address, error_root_cause(&error));
                 error!("{error_message}");
                 Err(DatapipeError::ValidationError(error_message))
             }
@@ -1122,11 +1298,8 @@ impl ProgramArgs {
                 Ok(Writer::Tls(Box::new(tls_writer)))
             }
             Err(error) => {
-                let error_message = format!(
-                    "TLS output error {}: {}",
-                    &address,
-                    error_root_cause(&error)
-                );
+                let error_message =
+                    format!("TLS output error {}: {}", address, error_root_cause(&error));
                 error!("{error_message}");
                 Err(DatapipeError::InputOutputError(error_message))
             }
@@ -1137,11 +1310,8 @@ impl ProgramArgs {
         // setup root cert store
         let mut root_cert_store = RootCertStore::empty();
         root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
-        if self.tls_output.tls_output_root_ca.is_some() {
-            match get_root_ca(
-                self.tls_output.tls_output_root_ca.as_ref().unwrap(),
-                &mut root_cert_store,
-            ) {
+        if let Some(ref root_ca) = self.tls_output.tls_output_root_ca {
+            match get_root_ca(root_ca, &mut root_cert_store) {
                 Ok(()) => {} // no issues loading CA roots
                 Err(error) => {
                     let error_message = format!(
@@ -1268,9 +1438,8 @@ impl ProgramArgs {
             let encryptor = StreamEncryptor::new(encryption_key)?;
             return Ok(Some(encryptor));
         }
-        if self.encryption_args.encryption_key.is_some() {
-            let encryption_key =
-                EncryptionKey::new(self.encryption_args.encryption_key.as_ref().unwrap()).unwrap();
+        if let Some(ref key_str) = self.encryption_args.encryption_key {
+            let encryption_key = EncryptionKey::new(key_str)?;
             let encryptor = StreamEncryptor::new(encryption_key)?;
             return Ok(Some(encryptor));
         }
@@ -1278,9 +1447,8 @@ impl ProgramArgs {
     }
 
     fn get_decryption_args(&self) -> Result<Option<StreamDecryptor>, DatapipeError> {
-        if self.decryption_args.decryption_key.is_some() {
-            let encryption_key =
-                EncryptionKey::new(self.decryption_args.decryption_key.as_ref().unwrap()).unwrap();
+        if let Some(ref key_str) = self.decryption_args.decryption_key {
+            let encryption_key = EncryptionKey::new(key_str)?;
             let decryptor = StreamDecryptor::new(encryption_key)?;
             return Ok(Some(decryptor));
         }
@@ -1330,7 +1498,7 @@ fn get_root_ca(
                     Err(error) => {
                         let error_message = format!(
                             "Error parsing certificate authority (CA) from {:?}: {}",
-                            &tls_root_ca_path,
+                            tls_root_ca_path,
                             error_root_cause(&error)
                         );
                         error!("{error_message}");
@@ -1342,7 +1510,7 @@ fn get_root_ca(
         Err(error) => {
             let error_message = format!(
                 "Cannot open TLS root CA file: {:?}: {}",
-                &tls_root_ca_path,
+                tls_root_ca_path,
                 error_root_cause(&error)
             );
             error!("{error_message}");
@@ -1378,7 +1546,7 @@ fn get_tls_cert_chain(
         Err(error) => {
             let error_message = format!(
                 "Cannot open TLS certificate chain file: {:?}: {}",
-                &tls_cert_chain_path,
+                tls_cert_chain_path,
                 error_root_cause(&error)
             );
             error!("{error_message}");
@@ -1403,7 +1571,7 @@ fn get_tls_private_key(
                     None => {
                         let error_message = format!(
                             "Private key not found in file: {:?}; file must be in PEM format",
-                            &tls_private_key_path
+                            tls_private_key_path
                         );
                         error!("{error_message}");
                         return Err(DatapipeError::ValidationError(error_message));
@@ -1412,7 +1580,7 @@ fn get_tls_private_key(
                 Err(error) => {
                     let error_message = format!(
                         "Invalid or corrupted TLS private key file: {:?}: {}",
-                        &tls_private_key_path,
+                        tls_private_key_path,
                         error_root_cause(&error)
                     );
                     error!("{error_message}");
@@ -1423,7 +1591,7 @@ fn get_tls_private_key(
         Err(error) => {
             let error_message = format!(
                 "Cannot open TLS private key file: {:?}: {}",
-                &tls_private_key_path,
+                tls_private_key_path,
                 error_root_cause(&error)
             );
             error!("{error_message}");

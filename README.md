@@ -9,6 +9,7 @@ A datapipe is configured by selecting one input and one or more outputs.  Data s
 1. [Input Protocols](#input-protocols)
 2. [Output Protocols](#output-protocols)
 3. [In Transit Options](#in-transit-options)
+4. [Configuration Files](#configuration-files)
 
 ## Input protocols
 * [FILE](#file-input) - read data from a file
@@ -190,6 +191,39 @@ Have `datapipe` generate a key:
 Provide the 51-byte UTF-8 encryption key used during encryption:
 
 ```datapipe --decrypt T8BRXrN15Xpz0KE2FjiZEYGmPk4IpHQmweh2DXERhx7vU6OIEJx```
+
+## Configuration Files
+`datapipe` supports reading, saving, and verifying TOML configuration files. A configuration file must define one input and at least one output destination.
+
+The `--use-config`, `--save-to-config`, and `--verify-config` flags are mutually exclusive.
+
+### Using a Configuration File
+Run `datapipe` with parameters defined in a TOML configuration file:
+
+```datapipe --use-config /path/to/datapipe.toml```
+
+### Saving Configuration to File
+Save given command-line parameters to a TOML configuration file for reuse without starting the pipeline:
+
+```datapipe --file-input input.dat --file-output output.dat --save-to-config /path/to/datapipe.toml```
+
+### Verifying a Configuration File
+Check whether a configuration file is valid without starting the pipeline (exits with status 0 if valid, non-zero if invalid):
+
+```datapipe --verify-config /path/to/datapipe.toml```
+
+### Sample TOML Configuration File
+```toml
+[input]
+file_input = "source.dat"
+
+[output]
+file_output = "destination.dat"
+
+[encryption]
+# Optional: 51-byte ASCII key for ChaCha20-Poly1305 inline encryption
+# encrypt = "T8BRXrN15Xpz0KE2FjiZEYGmPk4IpHQmweh2DXERhx7vU6OIEJx"
+```
 
 # Production Readiness
 `datapipe` is currently at **alpha maturity and should not be used for production work.**
