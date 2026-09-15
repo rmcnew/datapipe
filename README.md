@@ -9,6 +9,7 @@ A datapipe is configured by selecting one input and one or more outputs.  Data s
 1. [Input Protocols](#input-protocols)
 2. [Output Protocols](#output-protocols)
 3. [In Transit Options](#in-transit-options)
+4. [Configuration Files](#configuration-files)
 
 ## Input protocols
 * [FILE](#file-input) - read data from a file
@@ -28,14 +29,14 @@ File input requires the path to the file.
 ```datapipe --file-input /home/me/that_file.dat```
 
 ### HTTP Input
-HTTP input requires a URL and an input read rate (`--http-input-rate`) specified in milliseconds.  The input rate specifies how often to read from the URL.  It is expected that the data at the URL will change, thus the need to read repeatedly.  A tool such as [wget](https://www.gnu.org/software/wget/) or [curl](https://curl.se/) should be used for one-time downloads.  Specifying an input rate of `0` will download as often as possible which could negatively impact the target web server's performance.  
+HTTP input requires a URL and an input read rate (`--http-input-rate`) specified in milliseconds.  The input rate specifies how often to read from the URL.  It is expected that the data at the URL will change, thus the need to read repeatedly.  A tool such as [wget](https://www.gnu.org/software/wget/) or [curl](https://curl.se/) should be used for one-time downloads.  Specifying an input rate of `0` will download as often as possible which could negatively impact the target web server's performance.
 
-```datapipe --http-input http://local-weather.org/hourly_forecast --http-input-rate 3600000``` 
+```datapipe --http-input http://local-weather.org/hourly_forecast --http-input-rate 3600000```
 
 ### HTTPS Input
 HTTPS input requires a URL and an input read rate (`--https-input-rate`) specified in milliseconds.  The input rate specifies how often to read from the URL.  It is expected that the data at the URL will change, thus the need to read repeatedly.  A tool such as [wget](https://www.gnu.org/software/wget/) or [curl](https://curl.se/) should be used for one-time downloads.  Specifying an input rate of `0` will download as often as possible which could negatively impact the target web server's performance.
 
-```datapipe --https-input https://stock-ticker.net/ABCD --https-input-rate 5000``` 
+```datapipe --https-input https://stock-ticker.net/ABCD --https-input-rate 5000```
 
 Custom certificates can be specified (`--https-input-root-certificates`) by giving the path to certificates file.  The certificates file should be in PEM bundle format.
 
@@ -113,18 +114,18 @@ File output requires the path to the output file.
 ```datapipe --file-output records.dat```
 
 ### HTTP Output
-HTTP output requires a destination URL and an output rate (`--http-output-rate`) given in milliseconds.  An optional delimiter byte sequence (`--http-output-delimiter`) and whether to include the delimiter byte sequence with the segment that proceeds it (`--http-output-include-delimiter`) can also be specified.  
+HTTP output requires a destination URL and an output rate (`--http-output-rate`) given in milliseconds.  An optional delimiter byte sequence (`--http-output-delimiter`) and whether to include the delimiter byte sequence with the segment that proceeds it (`--http-output-include-delimiter`) can also be specified.
 
-The default delimiter is the newline character (`\n`).  The default behavior is to include the delimiter sequence with the segment that proceeds it.  
+The default delimiter is the newline character (`\n`).  The default behavior is to include the delimiter sequence with the segment that proceeds it.
 
 Note that inline encryption occurs **BEFORE** output delimiter segmentation, so delimiters in the unencrypted data stream cannot be used to segment the encrypted data stream.
 
 ```datapipe --http-output http://www.interesting-potato-facts.com/data-upload --http-output-rate 10000```
 
 ### HTTPS Output
-HTTPS output requires a destination URL and an output rate (`--https-output-rate`) given in milliseconds.  An optional delimiter byte sequence (`--https-output-delimiter`) and whether to include the delimiter byte sequence with the segment that proceeds it (`--https-output-include-delimiter`) can also be specified.  
+HTTPS output requires a destination URL and an output rate (`--https-output-rate`) given in milliseconds.  An optional delimiter byte sequence (`--https-output-delimiter`) and whether to include the delimiter byte sequence with the segment that proceeds it (`--https-output-include-delimiter`) can also be specified.
 
-The default delimiter is the newline character (`\n`).  The default behavior is to include the delimiter sequence with the segment that proceeds it.  
+The default delimiter is the newline character (`\n`).  The default behavior is to include the delimiter sequence with the segment that proceeds it.
 
 Note that inline encryption occurs **BEFORE** output delimiter segmentation, so delimiters in the unencrypted data stream cannot be used to segment the encrypted data stream.
 
@@ -171,7 +172,7 @@ UDP output writes data to a UDP address and port.
 ### Encryption
 In-line streaming encryption and decryption can provide additional security.  NOTE: for optimal data security, encrypt your data with another encryption system before using `datapipe`.  Then, use datapipe's stream encryption over TLS to send your data.  This will provide three layers of encryption which should help to deter most attackers.
 
-The current streaming encryption requires a symmetric key that is exactly 51 bytes in length and is valid UTF-8.  This allows the key to easily be copied or written down for later use and out-of-band transmission to a receiving party.  
+The current streaming encryption requires a symmetric key that is exactly 51 bytes in length and is valid UTF-8.  This allows the key to easily be copied or written down for later use and out-of-band transmission to a receiving party.
 
 The 51-byte UTF-8 key can be provided or automatically generated.
 
@@ -191,7 +192,42 @@ Provide the 51-byte UTF-8 encryption key used during encryption:
 
 ```datapipe --decrypt T8BRXrN15Xpz0KE2FjiZEYGmPk4IpHQmweh2DXERhx7vU6OIEJx```
 
+## Configuration Files
+`datapipe` supports reading, saving, and verifying TOML configuration files. A configuration file must define one input and at least one output destination.
+
+The `--use-config`, `--save-to-config`, and `--verify-config` flags are mutually exclusive.
+
+### Using a Configuration File
+Run `datapipe` with parameters defined in a TOML configuration file:
+
+```datapipe --use-config /path/to/datapipe.toml```
+
+Note that other input or output options cannot be used with "--use-config".
+
+### Saving Configuration to File
+Save given command-line parameters to a TOML configuration file for reuse without starting the pipeline:
+
+```datapipe --file-input input.dat --file-output output.dat --save-to-config /path/to/datapipe.toml```
+
+### Verifying a Configuration File
+Check whether a configuration file is valid without starting the pipeline (exits with status 0 if valid, non-zero if invalid):
+
+```datapipe --verify-config /path/to/datapipe.toml```
+
+### Sample TOML Configuration File
+```toml
+[input]
+file_input = "source.dat"
+
+[output]
+file_output = "destination.dat"
+
+[encryption]
+# Optional: 51-byte ASCII key for ChaCha20-Poly1305 inline encryption
+# encrypt = "T8BRXrN15Xpz0KE2FjiZEYGmPk4IpHQmweh2DXERhx7vU6OIEJx"
+```
+
 # Production Readiness
-`datapipe` is currently at **alpha maturity and should not be used for production work.**
+`datapipe` is currently at **beta maturity and should be used with caution.**  Please report any errors as GitHub Issues.
 
 

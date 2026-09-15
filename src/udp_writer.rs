@@ -17,7 +17,7 @@ impl UdpWriter {
             Ok(socket) => match socket.connect(address).await {
                 Ok(()) => Ok(Self { socket }),
                 Err(error) => {
-                    let error_message = format!("UDP connection error {}: {}", &address, error);
+                    let error_message = format!("UDP connection error {}: {}", address, error);
                     error!("{}", error_message);
                     Err(Error::new(error.kind(), error_message))
                 }

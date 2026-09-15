@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod args;
+pub mod config;
 pub mod datapipe_types;
 pub mod encryption;
 pub mod engine;

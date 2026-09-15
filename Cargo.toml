@@ -1,8 +1,8 @@
 [package]
 name = "datapipe"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
-authors = ["Richard Scott McNew <richard.scott.mcnew@outlook.com>"]
+authors = ["Richard Scott McNew <richard.scott.mcnew@gmail.com>"]
 description = "Stream data from here to there"
 license = "AGPL-3.0-only"
 repository = "https://github.com/rmcnew/datapipe"
@@ -28,5 +28,6 @@ serde_json = "1.0.133"
 thiserror = "2.0.3"
 tokio = { version = "1.41.1", features = ["full"] }
 tokio-rustls = { version = "0.26.0", default-features = false, features = ["ring"] }
+toml = "0.8"
 url = { version = "2.5.3", features = ["serde"] }
 webpki-roots = "0.26.6"
