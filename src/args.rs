@@ -414,9 +414,57 @@ impl LoggingArgs {
     }
 }
 
+/// The embedded GNU Affero General Public License (AGPL-3.0-only) for `datapipe`.
+pub const LICENSE: &str = include_str!("../LICENSE");
+
+/// Returns the name, version, and copyright information for `datapipe`.
+///
+/// # Examples
+///
+/// ```
+/// use datapipe::args::version_info;
+///
+/// let info = version_info();
+/// assert!(info.contains("datapipe"));
+/// assert!(info.contains(env!("CARGO_PKG_VERSION")));
+/// assert!(info.contains("Copyright"));
+/// ```
+#[must_use]
+pub fn version_info() -> String {
+    format!(
+        "{} {}\nCopyright (C) 2024-2026 {}",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_AUTHORS")
+    )
+}
+
+/// Returns the embedded license text for `datapipe`.
+///
+/// # Examples
+///
+/// ```
+/// use datapipe::args::license_info;
+///
+/// let lic = license_info();
+/// assert!(lic.contains("GNU AFFERO GENERAL PUBLIC LICENSE"));
+/// ```
+#[must_use]
+pub fn license_info() -> &'static str {
+    LICENSE
+}
+
 /// Overall command line args
 #[derive(Parser, Debug, Clone, PartialEq, Default)]
 pub struct ProgramArgs {
+    /// Print version, name, and copyright information and exit
+    #[arg(long = "version", short = 'V')]
+    pub version: bool,
+
+    /// Print license information and exit
+    #[arg(long = "license")]
+    pub license: bool,
+
     /// Start datapipe using a configuration file
     #[arg(long = "use-config", group = "config_action")]
     pub use_config: Option<PathBuf>,
@@ -463,6 +511,10 @@ impl ProgramArgs {
 
     /// Validate the program arguments according to CLI requirements
     pub fn validate(&self) -> Result<(), DatapipeError> {
+        if self.version || self.license {
+            return Ok(());
+        }
+
         if self.verify_config.is_some() {
             if self.has_cli_io() {
                 let error_message =
@@ -1658,5 +1710,39 @@ impl ServerCertVerifier for NoCertificateVerification {
             SignatureScheme::ED25519,
             SignatureScheme::ED448,
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_version_info() {
+        let info = version_info();
+        assert!(info.contains(env!("CARGO_PKG_NAME")));
+        assert!(info.contains(env!("CARGO_PKG_VERSION")));
+        assert!(info.contains("Copyright"));
+        assert!(info.contains("Richard Scott McNew"));
+    }
+
+    #[test]
+    fn test_license_info() {
+        let lic = license_info();
+        assert!(lic.contains("GNU AFFERO GENERAL PUBLIC LICENSE"));
+        assert!(lic.contains("Version 3, 19 November 2007"));
+    }
+
+    #[test]
+    fn test_validate_version_and_license() {
+        let mut args = ProgramArgs {
+            version: true,
+            ..Default::default()
+        };
+        assert!(args.validate().is_ok());
+
+        args.version = false;
+        args.license = true;
+        assert!(args.validate().is_ok());
     }
 }

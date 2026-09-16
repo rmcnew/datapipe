@@ -43,6 +43,16 @@ async fn run_datapipe_status(args: &[String]) -> std::process::ExitStatus {
 }
 
 #[cfg(test)]
+async fn run_datapipe_output(args: &[String]) -> std::process::Output {
+    let datapipe_pathbuf = get_datapipe_binary().unwrap();
+    Command::new(datapipe_pathbuf)
+        .args(args)
+        .output()
+        .await
+        .unwrap()
+}
+
+#[cfg(test)]
 async fn run_datapipe(args: Vec<String>) {
     let exit_status = run_datapipe_status(&args).await;
     assert!(exit_status.success());
@@ -369,4 +379,25 @@ async fn integration_test_config_mutual_exclusion() {
     ];
     let status = run_datapipe_status(&args).await;
     assert!(!status.success());
+}
+
+#[tokio::test]
+async fn integration_test_version() {
+    let args = vec!["--version".to_string()];
+    let output = run_datapipe_output(&args).await;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("datapipe"));
+    assert!(stdout.contains(env!("CARGO_PKG_VERSION")));
+    assert!(stdout.contains("Copyright"));
+}
+
+#[tokio::test]
+async fn integration_test_license() {
+    let args = vec!["--license".to_string()];
+    let output = run_datapipe_output(&args).await;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("GNU AFFERO GENERAL PUBLIC LICENSE"));
+    assert!(stdout.contains("Version 3, 19 November 2007"));
 }

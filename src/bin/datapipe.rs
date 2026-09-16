@@ -9,6 +9,20 @@ use std::process::ExitCode;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    let mut args = ProgramArgs::parse();
+
+    // If --version is passed, print version, name, and copyright, then exit
+    if args.version {
+        println!("{}", datapipe::args::version_info());
+        return ExitCode::SUCCESS;
+    }
+
+    // If --license is passed, print embedded license and exit
+    if args.license {
+        print!("{}", datapipe::args::license_info());
+        return ExitCode::SUCCESS;
+    }
+
     // Setup default crypto provider
     if rustls::crypto::ring::default_provider()
         .install_default()
@@ -17,8 +31,6 @@ async fn main() -> ExitCode {
         eprintln!("Failed to install ring as rustls crypto provider");
         return ExitCode::FAILURE;
     }
-
-    let mut args = ProgramArgs::parse();
 
     // If --verify-config is passed, validate the configuration file and exit
     if let Some(ref config_path) = args.verify_config {
