@@ -381,6 +381,8 @@ impl From<&ProgramArgs> for DatapipeConfig {
 impl From<DatapipeConfig> for ProgramArgs {
     fn from(config: DatapipeConfig) -> Self {
         Self {
+            version: false,
+            license: false,
             use_config: None,
             save_to_config: None,
             verify_config: None,

@@ -10,6 +10,7 @@ A datapipe is configured by selecting one input and one or more outputs.  Data s
 2. [Output Protocols](#output-protocols)
 3. [In Transit Options](#in-transit-options)
 4. [Configuration Files](#configuration-files)
+5. [Program Information](#program-information)
 
 ## Input protocols
 * [FILE](#file-input) - read data from a file
@@ -226,6 +227,19 @@ file_output = "destination.dat"
 # Optional: 51-byte ASCII key for ChaCha20-Poly1305 inline encryption
 # encrypt = "T8BRXrN15Xpz0KE2FjiZEYGmPk4IpHQmweh2DXERhx7vU6OIEJx"
 ```
+
+## Program Information
+`datapipe` provides command-line parameters to inspect version, copyright, and license information.
+
+### Version
+Display the datapipe name, version, and copyright information, then exit:
+
+```datapipe --version```
+
+### License
+Display the full text of the AGPL-3.0 license embedded directly within the datapipe binary, then exit:
+
+```datapipe --license```
 
 # Production Readiness
 `datapipe` is currently at **beta maturity and should be used with caution.**  Please report any errors as GitHub Issues.
