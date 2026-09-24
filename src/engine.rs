@@ -1,5 +1,5 @@
 /// The main data read-write loop
-use crate::datapipe_types::{InputReader, OutputWriter, error_root_cause};
+use crate::datapipe_types::{DatapipeError, InputReader, OutputWriter, error_root_cause};
 use crate::encryption::{StreamDecryptor, StreamEncryptor};
 use crate::parameters::Parameters;
 use crate::reader::Reader;
@@ -10,184 +10,240 @@ use tokio::sync::mpsc::{Receiver, Sender, channel};
 const QUEUE_SIZE: usize = 2048;
 const RETRY_MAX: i32 = 5; // retry failed reads or writes up to this many consecutive times before stopping
 
-async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) {
+/// reader_child reads the input stream and pushes the read bytes into a queue.
+/// When no bytes can be read, it briefly sleeps and retries until RETRY_MAX times
+/// before quitting.  If an error occurs, it stops and returns the error.
+async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) -> Result<(), DatapipeError> {
     let mut read_retry_count = 0;
     loop {
         match reader.read().await {
+            // read success
             Ok(buffer) => {
                 if buffer.is_empty() {
                     // retry a few times to make sure all of the input is read
                     read_retry_count += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                     if read_retry_count >= RETRY_MAX {
-                        warn!("reader_child: no bytes read; stopping");
+                        let warning = "reader_child: no bytes read; stopping".to_string();
+                        warn!("{warning}");
                         break;
                     }
                 } else {
-                    // buffer not empty send the data
+                    // buffer not empty; send the data
                     let v = buffer.to_vec();
                     match sender.send(v).await {
                         Ok(()) => {
                             read_retry_count = 0;
                         }
-                        Err(_error) => {
-                            warn!("reader_child: cannot send to next stage; stopping");
-                            break;
+                        Err(err) => {
+                            let error_message = format!(
+                                "reader_child: cannot send to next stage: {}; stopping",
+                                error_root_cause(&err)
+                            );
+                            error!("{error_message}");
+                            return Err(DatapipeError::InputOutputError(error_message));
                         }
                     }
                 }
             }
-            Err(error) => {
+            // read error
+            Err(err) => {
+                // try again later
                 read_retry_count += 1;
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 warn!(
-                    "reader_child:  Error reading from input source: {error}; read_retry_count is {read_retry_count}"
+                    "reader_child:  Error reading from input source: {}; read_retry_count is {read_retry_count}",
+                    error_root_cause(&err)
                 );
+                // unless RETRY_MAX is reached; in that case, return error
                 if read_retry_count >= RETRY_MAX {
                     let error_message = format!(
                         "reader_child:  RETRY_MAX {RETRY_MAX} reached; quitting due to repeated read errors"
                     );
                     error!("{error_message}");
-                    break;
+                    return Err(DatapipeError::InputOutputError(error_message));
                 }
             }
         }
     }
+    Ok(())
 }
 
+/// decryptor_child receives an encrypted byte stream, queues enough data to decrypt,
+/// performs decryption, and sends the decrypted byte stream
 async fn decryptor_child(
     mut receiver: Receiver<Vec<u8>>,
     mut decryptor: StreamDecryptor,
     sender: Sender<Vec<u8>>,
-) {
+) -> Result<(), DatapipeError> {
     let mut buffer: Vec<u8> = Vec::new();
     let mut retry_count = 0;
     loop {
         match receiver.recv().await {
+            // receive the encrypted byte stream
             Some(bytes) => {
                 retry_count = 0;
                 buffer.extend_from_slice(&bytes);
                 match decryptor.decrypt(&mut buffer) {
+                    // decrypt success, send the decrypted data
                     Ok(plain) => match sender.send(plain).await {
+                        // data send success
                         Ok(()) => {}
-                        Err(_error) => {
-                            warn!("decryptor_child: cannot send to next stage; stopping");
-                            break;
+                        // data send error; return error
+                        Err(err) => {
+                            let error_message = format!(
+                                "decryptor_child: cannot send to next stage: {}; stopping",
+                                error_root_cause(&err)
+                            );
+                            error!("{error_message}");
+                            return Err(DatapipeError::InputOutputError(error_message));
                         }
                     },
-                    Err(error) => {
+                    // decrypt error, return error
+                    Err(err) => {
                         let error_message = format!(
                             "decryptor_child: error decrypting data: {}",
-                            error_root_cause(&error)
+                            error_root_cause(&err)
                         );
                         error!("{error_message}");
-                        eprintln!("{error_message}");
-                        break;
+                        return Err(DatapipeError::EncryptionError(error_message));
                     }
                 }
             }
+            // no data received, wait and try again later
             None => {
                 retry_count += 1;
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                // unless RETRY_MAX reached; then stop
                 if retry_count >= RETRY_MAX {
-                    warn!("decryptor_child: no bytes received; stopping");
+                    let warning = "decryptor_child: no bytes received; stopping".to_string();
+                    warn!("{warning}");
                     break;
                 }
             }
         }
     }
+    Ok(())
 }
 
+/// encryptor_child receives a data stream, queues enough data to encrypt,
+/// encrypts the data, and then sends the encrypted data stream
 async fn encryptor_child(
     mut receiver: Receiver<Vec<u8>>,
     mut encryptor: StreamEncryptor,
     sender: Sender<Vec<u8>>,
-) {
+) -> Result<(), DatapipeError> {
     let mut buffer: Vec<u8> = Vec::new();
     let mut retry_count = 0;
     loop {
         match receiver.recv().await {
+            // receive success
             Some(bytes) => {
                 retry_count = 0;
                 buffer.extend_from_slice(&bytes);
                 match encryptor.encrypt(&mut buffer) {
+                    // encrypt success, send the encrypted data
                     Ok(cipher) => match sender.send(cipher).await {
+                        // send success
                         Ok(()) => {}
-                        Err(_error) => {
-                            warn!("encryptor_child: cannot send to next stage; stopping");
-                            break;
+                        // send error, return error
+                        Err(err) => {
+                            let error_message = format!(
+                                "encryptor_child: cannot send to next stage: {}; stopping",
+                                error_root_cause(&err)
+                            );
+                            error!("{error_message}");
+                            return Err(DatapipeError::InputOutputError(error_message));
                         }
                     },
+                    // encrypt error, return error
                     Err(error) => {
                         let error_message = format!(
                             "encryptor_child: error encrypting data: {}",
                             error_root_cause(&error)
                         );
                         error!("{error_message}");
-                        eprintln!("{error_message}");
-                        break;
+                        return Err(DatapipeError::EncryptionError(error_message));
                     }
                 }
             }
+            // no bytes received, wait and try again later
             None => {
                 retry_count += 1;
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                // unless RETRY_MAX reached, then stop
                 if retry_count >= RETRY_MAX {
-                    warn!("encryptor_child: no bytes received; stopping");
+                    let warning = "encryptor_child: no bytes received; stopping".to_string();
+                    warn!("{warning}");
                     break;
                 }
             }
         }
     }
+    Ok(())
 }
 
-async fn writer_child(mut receiver: Receiver<Vec<u8>>, mut writers: Vec<Writer>) {
+/// writer_child receives a byte stream and writes the byte stream to
+/// all writers; as long as one writer in the last RETRY_MAX writers
+/// is successful, it will continue receiving and writing
+async fn writer_child(
+    mut receiver: Receiver<Vec<u8>>,
+    mut writers: Vec<Writer>,
+) -> Result<(), DatapipeError> {
     let mut write_retry_count = 0;
-    'writer: loop {
+    loop {
         match receiver.recv().await {
+            // receive success
             Some(bytes) => {
                 if !bytes.is_empty() {
+                    // iterate through all the writers
                     for writer in &mut writers {
                         match writer.write(&bytes).await {
+                            // write success
                             Ok(()) => {
-                                // if at least one writer is working, continue
+                                // if at least one writer in the last
+                                // RETRY_MAX writers is working, continue
                                 write_retry_count = 0;
                             }
-                            Err(error) => {
-                                // should the count be per output sink?
-                                let error_cause = error_root_cause(&error);
+                            // write error, log the error and continue
+                            Err(err) => {
+                                let error_cause = error_root_cause(&err);
                                 write_retry_count += 1;
-                                warn!(
+                                error!(
                                     "writer_child:  Error writing to output: {error_cause}; write_retry_count is {write_retry_count}"
                                 );
+                                // unless RETRY_MAX reached, return error
                                 if write_retry_count >= RETRY_MAX {
                                     let error_message = format!(
                                         "writer_child: RETRY_MAX {RETRY_MAX} reached; quitting due to repeated write errors"
                                     );
                                     error!("{error_message}");
-                                    eprintln!("{error_message}");
-                                    break 'writer;
+                                    return Err(DatapipeError::InputOutputError(error_message));
                                 }
                             }
                         }
                     }
                 }
             }
+            // no data received, wait and try again later
             None => {
                 // retry a few times before quitting to ensure all the output gets written
                 write_retry_count += 1;
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                // until RETRY_MAX is reached, the stop
                 if write_retry_count >= RETRY_MAX {
-                    warn!("writer_child: stopping");
+                    let warning = "writer_child: no more input received; stopping".to_string();
+                    warn!("{warning}");
                     break;
                 }
             }
         }
     }
+    Ok(())
 }
 
 /// library API entry point: just supply parameters and run it
-pub async fn run_data_pipe(parameters: Parameters) {
+pub async fn run_datapipe(parameters: Parameters) -> Result<(), DatapipeError> {
     // vec to track child threads
     let mut children = Vec::new();
     // setup queue from reader thread to writer thread
@@ -277,10 +333,18 @@ pub async fn run_data_pipe(parameters: Parameters) {
     info!("main thread: waiting for child threads to finish");
     for child in children {
         match child.await {
-            Ok(()) => {}
-            Err(error) => {
-                eprintln!("{error}");
+            Ok(child_result) => match child_result {
+                Ok(()) => {}
+                Err(err) => {
+                    error!("{err}");
+                    return Err(err);
+                }
+            },
+            Err(err) => {
+                error!("{err}");
+                return Err(err.into());
             }
         }
     }
+    Ok(())
 }
