@@ -255,6 +255,7 @@ async fn integration_test_strong_scp_file() {
             }
         }
     }
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     // verify file copy worked
     assert!(output_file_path.exists());
     // compare the file contents

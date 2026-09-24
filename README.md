@@ -10,7 +10,8 @@ A datapipe is configured by selecting one input and one or more outputs.  Data s
 2. [Output Protocols](#output-protocols)
 3. [In Transit Options](#in-transit-options)
 4. [Configuration Files](#configuration-files)
-5. [Program Information](#program-information)
+5. [Library API](#library-api)
+6. [Program Information](#program-information)
 
 ## Input protocols
 * [FILE](#file-input) - read data from a file
@@ -240,6 +241,69 @@ Display the datapipe name, version, and copyright information, then exit:
 Display the full text of the AGPL-3.0 license embedded directly within the datapipe binary, then exit:
 
 ```datapipe --license```
+
+## Library API
+`datapipe` can be used as a Rust library in your own projects.  Add it as a dependency in your `Cargo.toml`:
+
+```toml
+[dependencies]
+datapipe = "0.1"
+tokio = { version = "1", features = ["full"] }
+```
+
+### Core Concepts
+
+The library API centers around three components:
+
+1. **`ParametersBuilder`** — A builder that assembles the pipeline configuration: one `Reader` (input source), one or more `Writer`s (output destinations), and optional `StreamEncryptor`/`StreamDecryptor` stages.
+2. **`Parameters`** — The validated pipeline configuration produced by `ParametersBuilder::build()`.
+3. **`run_datapipe(parameters)`** — The async entry point that spawns the pipeline tasks and runs data from input to output(s).
+
+### Basic Usage
+
+```rust,no_run
+use datapipe::engine::run_datapipe;
+use datapipe::file_reader::FileReader;
+use datapipe::file_writer::FileWriter;
+use datapipe::parameters::ParametersBuilder;
+use datapipe::reader::Reader;
+use datapipe::writer::Writer;
+use std::path::Path;
+
+#[tokio::main]
+async fn main() {
+    let reader = FileReader::new(Path::new("input.dat")).await.unwrap();
+    let writer = FileWriter::new(Path::new("output.dat")).await.unwrap();
+
+    let parameters = ParametersBuilder::new()
+        .reader(Reader::from(reader))
+        .writer(Writer::from(writer))
+        .build()
+        .unwrap();
+
+    run_datapipe(parameters).await;
+}
+```
+
+### Available Readers and Writers
+
+All input protocols (File, TCP, TCP Listen, TLS, TLS Listen, UDP, HTTP, HTTPS, Stdin) and output protocols (File, TCP, TLS, UDP, HTTP, HTTPS, Stdout) are available as library types.  Each concrete type can be converted to the `Reader` or `Writer` enum using `Reader::from()` or `Writer::from()`.
+
+### Example Programs
+
+Complete working examples are in the [`examples/`](examples/) directory:
+
+* [`file_copy`](examples/file_copy.rs) — Copy a file using `ParametersBuilder` and `run_datapipe`
+* [`encrypted_file_copy`](examples/encrypted_file_copy.rs) — Copy a file with ChaCha20-Poly1305 inline encryption
+* [`encrypted_file_decrypt`](examples/encrypted_file_decrypt.rs) — Decrypt a file encrypted by `encrypted_file_copy`
+* [`tcp_file_transfer`](examples/tcp_file_transfer.rs) — Transfer a file over a TCP connection on localhost
+* [`multi_output`](examples/multi_output.rs) — Fan out a single input to multiple output files and stdout
+
+Run an example with:
+
+```bash
+cargo run --example file_copy -- input.dat output.dat
+```
 
 # Production Readiness
 `datapipe` is currently at **beta maturity and should be used with caution.**  Please report any errors as GitHub Issues.

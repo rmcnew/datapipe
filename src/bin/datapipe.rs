@@ -2,7 +2,7 @@
 use clap::Parser;
 use datapipe::args::ProgramArgs;
 use datapipe::config::DatapipeConfig;
-use datapipe::engine::run_data_pipe;
+use datapipe::engine::run_datapipe;
 use datapipe::logger::init_logger;
 use log::info;
 use std::process::ExitCode;
@@ -113,19 +113,22 @@ async fn main() -> ExitCode {
     };
     let _log_handle = match init_logger(log_dir, "datapipe", args.logging_args.keep_logs) {
         Ok(handle) => handle,
-        Err(error) => {
-            eprintln!("Logger error: {}", error);
+        Err(err) => {
+            eprintln!("Logger error: {}", err);
             return ExitCode::FAILURE;
         }
     };
     info!("Args are: {:?}", args);
     match args.to_parameters().await {
-        Ok(parameters) => {
-            run_data_pipe(parameters).await;
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("{}", error);
+        Ok(parameters) => match run_datapipe(parameters).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("{}", err);
+                ExitCode::FAILURE
+            }
+        },
+        Err(err) => {
+            eprintln!("{}", err);
             ExitCode::FAILURE
         }
     }

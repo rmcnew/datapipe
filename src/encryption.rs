@@ -609,6 +609,12 @@ impl StreamEncryptor {
     }
 }
 
+impl std::fmt::Debug for StreamEncryptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_struct("StreamEncryptor").finish()
+    }
+}
+
 pub struct StreamDecryptor {
     decryptor: DecryptorBE32<XChaCha20Poly1305>,
 }
@@ -684,5 +690,11 @@ impl StreamDecryptor {
             }
         }
         Ok(clear_data)
+    }
+}
+
+impl std::fmt::Debug for StreamDecryptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_struct("StreamDecryptor").finish()
     }
 }

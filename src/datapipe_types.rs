@@ -22,6 +22,9 @@ pub enum DatapipeError {
     /// Provided parameter is not valid
     #[error("ValidationError: {0}")]
     ValidationError(String),
+    /// Child thread error
+    #[error("JoinError: {0}")]
+    JoinError(String),
 }
 
 impl From<chacha20poly1305::Error> for DatapipeError {
@@ -52,6 +55,12 @@ impl From<rustls::Error> for DatapipeError {
 impl From<rustls::client::VerifierBuilderError> for DatapipeError {
     fn from(error: rustls::client::VerifierBuilderError) -> Self {
         Self::ConfigurationError(format!("{error}"))
+    }
+}
+
+impl From<tokio::task::JoinError> for DatapipeError {
+    fn from(error: tokio::task::JoinError) -> Self {
+        Self::JoinError(format!("{error}"))
     }
 }
 
