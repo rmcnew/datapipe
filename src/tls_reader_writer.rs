@@ -65,7 +65,8 @@ impl InputReader for TlsReaderWriter {
 
 impl OutputWriter for TlsReaderWriter {
     async fn write(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        self.tls_stream.write_all(bytes).await
+        self.tls_stream.write_all(bytes).await?;
+        self.tls_stream.flush().await
     }
 }
 

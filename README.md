@@ -238,7 +238,7 @@ Display the datapipe name, version, and copyright information, then exit:
 ```datapipe --version```
 
 ### License
-Display the full text of the AGPL-3.0 license embedded directly within the datapipe binary, then exit:
+Display of datapipe's license, then exit:
 
 ```datapipe --license```
 
