@@ -78,7 +78,16 @@ impl InputReader for TlsListenReader {
                 info!("TlsListenReader received {} bytes", length);
                 Ok(Bytes::copy_from_slice(&vec_bytes[..length]))
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                if error.kind() == ErrorKind::UnexpectedEof
+                    || error.kind() == ErrorKind::ConnectionReset
+                {
+                    info!("TlsListenReader: connection closed by peer");
+                    Ok(Bytes::new())
+                } else {
+                    Err(error)
+                }
+            }
         }
     }
 }
