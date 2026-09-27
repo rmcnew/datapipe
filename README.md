@@ -9,9 +9,10 @@ A datapipe is configured by selecting one input and one or more outputs.  Data s
 1. [Input Protocols](#input-protocols)
 2. [Output Protocols](#output-protocols)
 3. [In Transit Options](#in-transit-options)
-4. [Configuration Files](#configuration-files)
-5. [Library API](#library-api)
-6. [Program Information](#program-information)
+4. [Metrics & Live Display](#metrics--live-display)
+5. [Configuration Files](#configuration-files)
+6. [Library API](#library-api)
+7. [Program Information](#program-information)
 
 ## Input protocols
 * [FILE](#file-input) - read data from a file
@@ -194,6 +195,39 @@ Provide the 51-byte UTF-8 encryption key used during encryption:
 
 ```datapipe --decrypt T8BRXrN15Xpz0KE2FjiZEYGmPk4IpHQmweh2DXERhx7vU6OIEJx```
 
+## Metrics & Live Display
+`datapipe` tracks streaming transfer statistics in real time, including the elapsed duration, total bytes read, instantaneous read throughput, total bytes written, and write throughput.
+
+### Live Display in CLI
+By default, the `datapipe` CLI displays live, updating metrics on standard error:
+
+```text
+[datapipe] Elapsed: 00:00:03 | Read: 4.50 MB (1.50 MB/s) | Written: 4.50 MB (1.50 MB/s)
+```
+
+Upon pipeline completion, a final summary is printed:
+
+```text
+[datapipe] Completed in 3.12s | Read: 4.50 MB (1.44 MB/s) | Written: 4.50 MB (1.44 MB/s)
+```
+
+### Disabling Metrics
+To disable metrics tracking and live display, provide the `--no-metrics` CLI flag:
+
+```datapipe --file-input source.dat --file-output dest.dat --no-metrics```
+
+When using TOML configuration files, metrics tracking can also be disabled by setting `no_metrics = true`:
+
+```toml
+[input]
+file_input = "source.dat"
+
+[output]
+file_output = "dest.dat"
+
+no_metrics = true
+```
+
 ## Configuration Files
 `datapipe` supports reading, saving, and verifying TOML configuration files. A configuration file must define one input and at least one output destination.
 
@@ -238,7 +272,7 @@ Display the datapipe name, version, and copyright information, then exit:
 ```datapipe --version```
 
 ### License
-Display of datapipe's license, then exit:
+Display the datapipe license, then exit:
 
 ```datapipe --license```
 

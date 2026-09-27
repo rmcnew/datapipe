@@ -1,6 +1,7 @@
 /// The main data read-write loop
 use crate::datapipe_types::{DatapipeError, InputReader, OutputWriter, error_root_cause};
 use crate::encryption::{StreamDecryptor, StreamEncryptor};
+use crate::metrics::ByteMetrics;
 use crate::parameters::Parameters;
 use crate::reader::Reader;
 use crate::writer::Writer;
@@ -13,7 +14,11 @@ const RETRY_MAX: i32 = 5; // retry failed reads or writes up to this many consec
 /// reader_child reads the input stream and pushes the read bytes into a queue.
 /// When no bytes can be read, it briefly sleeps and retries until RETRY_MAX times
 /// before quitting.  If an error occurs, it stops and returns the error.
-async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) -> Result<(), DatapipeError> {
+async fn reader_child(
+    mut reader: Reader,
+    sender: Sender<Vec<u8>>,
+    metrics: Option<ByteMetrics>,
+) -> Result<(), DatapipeError> {
     let mut read_retry_count = 0;
     loop {
         match reader.read().await {
@@ -29,6 +34,9 @@ async fn reader_child(mut reader: Reader, sender: Sender<Vec<u8>>) -> Result<(),
                         break;
                     }
                 } else {
+                    if let Some(ref m) = metrics {
+                        m.add_bytes(buffer.len() as u64);
+                    }
                     // buffer not empty; send the data
                     let v = buffer.to_vec();
                     match sender.send(v).await {
@@ -189,6 +197,7 @@ async fn encryptor_child(
 async fn writer_child(
     mut receiver: Receiver<Vec<u8>>,
     mut writers: Vec<Writer>,
+    metrics: Option<ByteMetrics>,
 ) -> Result<(), DatapipeError> {
     let mut write_retry_count = 0;
     loop {
@@ -201,6 +210,9 @@ async fn writer_child(
                         match writer.write(&bytes).await {
                             // write success
                             Ok(()) => {
+                                if let Some(ref m) = metrics {
+                                    m.add_bytes(bytes.len() as u64);
+                                }
                                 // if at least one writer in the last
                                 // RETRY_MAX writers is working, continue
                                 write_retry_count = 0;
@@ -254,11 +266,17 @@ pub async fn run_datapipe(parameters: Parameters) -> Result<(), DatapipeError> {
         maybe_decryptor,
         maybe_encryptor,
         writers,
+        metrics,
     } = parameters;
+
+    let (reader_metrics, writer_metrics) = match metrics {
+        Some(m) => (Some(m.reader_bytes), Some(m.writer_bytes)),
+        None => (None, None),
+    };
 
     // spawn threads:
     // 1)  reader thread to get byte input and place in input queue
-    let reader_handle = tokio::spawn(reader_child(reader, reader_sender));
+    let reader_handle = tokio::spawn(reader_child(reader, reader_sender, reader_metrics));
     children.push(reader_handle);
     // this is messy, but we don't want to add empty stages or unnecessary queues
     // is there a better way to build a dynamic pipeline of stages?
@@ -286,7 +304,8 @@ pub async fn run_datapipe(parameters: Parameters) -> Result<(), DatapipeError> {
                     ));
                     children.push(encryptor_handle);
 
-                    let writer_handle = tokio::spawn(writer_child(encryptor_receiver, writers));
+                    let writer_handle =
+                        tokio::spawn(writer_child(encryptor_receiver, writers, writer_metrics));
                     children.push(writer_handle);
                 }
                 None => {
@@ -300,7 +319,8 @@ pub async fn run_datapipe(parameters: Parameters) -> Result<(), DatapipeError> {
                     ));
                     children.push(decryptor_handle);
 
-                    let writer_handle = tokio::spawn(writer_child(decryptor_receiver, writers));
+                    let writer_handle =
+                        tokio::spawn(writer_child(decryptor_receiver, writers, writer_metrics));
                     children.push(writer_handle);
                 }
             }
@@ -318,12 +338,14 @@ pub async fn run_datapipe(parameters: Parameters) -> Result<(), DatapipeError> {
                     ));
                     children.push(encryptor_handle);
 
-                    let writer_handle = tokio::spawn(writer_child(encryptor_receiver, writers));
+                    let writer_handle =
+                        tokio::spawn(writer_child(encryptor_receiver, writers, writer_metrics));
                     children.push(writer_handle);
                 }
                 None => {
                     // neither decryptor nor encryptor
-                    let writer_handle = tokio::spawn(writer_child(reader_receiver, writers));
+                    let writer_handle =
+                        tokio::spawn(writer_child(reader_receiver, writers, writer_metrics));
                     children.push(writer_handle);
                 }
             }
