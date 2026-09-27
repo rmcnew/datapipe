@@ -73,24 +73,71 @@ impl Drop for TempFileGuard {
     }
 }
 
+/// RAII guard for a spawned child process that guarantees the process is killed on drop.
+#[derive(Debug)]
+pub struct ChildProcessGuard {
+    pub child: tokio::process::Child,
+}
+
+impl ChildProcessGuard {
+    pub fn new(child: tokio::process::Child) -> Self {
+        Self { child }
+    }
+
+    pub fn id(&self) -> Option<u32> {
+        self.child.id()
+    }
+
+    pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.child.wait().await
+    }
+
+    pub async fn kill(&mut self) -> std::io::Result<()> {
+        self.child.kill().await
+    }
+}
+
+impl Drop for ChildProcessGuard {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+    }
+}
+
+/// Spawns a datapipe CLI child process with `kill_on_drop(true)` and wrapped in `ChildProcessGuard`.
+pub fn spawn_cli_child(args: &[String]) -> ChildProcessGuard {
+    let binary = get_datapipe_binary();
+    let mut cmd = Command::new(binary);
+    cmd.args(args);
+    cmd.kill_on_drop(true);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    let child = cmd.spawn().expect("Failed to spawn datapipe child");
+    ChildProcessGuard::new(child)
+}
+
 /// Run datapipe binary and return its exit status
 pub async fn run_cli_status(args: &[String]) -> std::process::ExitStatus {
     let binary = get_datapipe_binary();
-    Command::new(binary)
-        .args(args)
-        .spawn()
-        .expect("Failed to spawn datapipe")
-        .wait()
-        .await
-        .expect("Failed to wait on datapipe")
+    let mut cmd = Command::new(binary);
+    cmd.args(args);
+    cmd.kill_on_drop(true);
+    let mut child = cmd.spawn().expect("Failed to spawn datapipe");
+    child.wait().await.expect("Failed to wait on datapipe")
 }
 
 /// Run datapipe binary and capture stdout, stderr, and exit status
 pub async fn run_cli_output(args: &[String]) -> std::process::Output {
     let binary = get_datapipe_binary();
-    Command::new(binary)
-        .args(args)
-        .output()
+    let mut cmd = Command::new(binary);
+    cmd.args(args);
+    cmd.kill_on_drop(true);
+    let child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn datapipe");
+    child
+        .wait_with_output()
         .await
         .expect("Failed to execute datapipe")
 }
@@ -98,8 +145,10 @@ pub async fn run_cli_output(args: &[String]) -> std::process::Output {
 /// Run datapipe binary with piped stdin input
 pub async fn run_cli_with_stdin(args: &[String], input_data: &[u8]) -> std::process::Output {
     let binary = get_datapipe_binary();
-    let mut child = Command::new(binary)
-        .args(args)
+    let mut cmd = Command::new(binary);
+    cmd.args(args);
+    cmd.kill_on_drop(true);
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

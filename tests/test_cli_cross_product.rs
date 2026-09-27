@@ -5,7 +5,7 @@ mod common;
 
 use common::{
     MockHttpServer, MockHttpsServer, TempFileGuard, get_test_document, identical_contents,
-    run_cli_output, run_cli_status, run_cli_with_stdin,
+    run_cli_output, run_cli_status, run_cli_with_stdin, spawn_cli_child,
 };
 use datapipe::datapipe_types::EncryptionKey;
 use datapipe::utilities::get_unused_port;
@@ -21,6 +21,7 @@ async fn test_cli_file_to_file() {
         test_doc.to_str().unwrap().to_string(),
         "--file-output".to_string(),
         output_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let status = run_cli_status(&args).await;
@@ -46,6 +47,7 @@ async fn test_cli_file_to_tcp_to_file() {
         tcp_addr.clone(),
         "--file-output".to_string(),
         output_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let send_args = vec![
@@ -53,6 +55,7 @@ async fn test_cli_file_to_tcp_to_file() {
         test_doc.to_str().unwrap().to_string(),
         "--tcp-output".to_string(),
         tcp_addr.clone(),
+        "--no-metrics".to_string(),
     ];
 
     let receiver = tokio::spawn(async move { run_cli_status(&listen_args).await });
@@ -89,6 +92,7 @@ async fn test_cli_file_to_tls_to_file() {
         "--tls-listen-input-skip-client-verify".to_string(),
         "--file-output".to_string(),
         output_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let send_args = vec![
@@ -97,6 +101,7 @@ async fn test_cli_file_to_tls_to_file() {
         "--tls-output".to_string(),
         tls_addr.clone(),
         "--tls-output-skip-server-verify".to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let receiver = tokio::spawn(async move { run_cli_status(&listen_args).await });
@@ -132,6 +137,7 @@ async fn test_cli_file_to_udp_to_file() {
         udp_addr.clone(),
         "--file-output".to_string(),
         output_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let send_args = vec![
@@ -139,12 +145,11 @@ async fn test_cli_file_to_udp_to_file() {
         input_file.path.to_str().unwrap().to_string(),
         "--udp-output".to_string(),
         udp_addr.clone(),
+        "--no-metrics".to_string(),
     ];
 
-    let receiver = tokio::spawn(async move {
-        let _ =
-            tokio::time::timeout(Duration::from_millis(1500), run_cli_status(&listen_args)).await;
-    });
+    // Spawn listener as a guarded child process
+    let mut listener = spawn_cli_child(&listen_args);
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -152,7 +157,13 @@ async fn test_cli_file_to_udp_to_file() {
 
     let send_status = sender.await.unwrap();
     assert!(send_status.success());
-    let _ = receiver.await;
+
+    // Give time for UDP datagrams to be received and written
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Explicitly kill and reap the UDP listener child process
+    let _ = listener.kill().await;
+    let _ = listener.wait().await;
 
     assert!(output_file.path.exists());
     let written = tokio::fs::read(&output_file.path).await.unwrap();
@@ -168,6 +179,7 @@ async fn test_cli_stdin_to_file() {
         "--stdin-input".to_string(),
         "--file-output".to_string(),
         output_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let output = run_cli_with_stdin(&args, input_bytes).await;
@@ -186,6 +198,7 @@ async fn test_cli_file_to_stdout() {
         "--file-input".to_string(),
         input_file.path.to_str().unwrap().to_string(),
         "--stdout-output".to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let output = run_cli_output(&args).await;
@@ -197,7 +210,11 @@ async fn test_cli_file_to_stdout() {
 async fn test_cli_stdin_to_stdout() {
     let payload = b"Pure pipeline pipe: stdin straight to stdout!";
 
-    let args = vec!["--stdin-input".to_string(), "--stdout-output".to_string()];
+    let args = vec![
+        "--stdin-input".to_string(),
+        "--stdout-output".to_string(),
+        "--no-metrics".to_string(),
+    ];
 
     let output = run_cli_with_stdin(&args, payload).await;
     assert!(output.status.success());
@@ -217,10 +234,14 @@ async fn test_cli_http_input_to_file() {
         "10".to_string(),
         "--file-output".to_string(),
         output_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
-    // Run CLI with timeout because HTTP polling keeps running
-    let _ = tokio::time::timeout(Duration::from_millis(600), run_cli_status(&args)).await;
+    // Spawn CLI child process and kill after data is retrieved
+    let mut child = spawn_cli_child(&args);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 
     assert!(output_file.path.exists());
     let written = tokio::fs::read(&output_file.path).await.unwrap();
@@ -240,6 +261,7 @@ async fn test_cli_file_to_http_output() {
         mock_server.url(),
         "--http-output-rate".to_string(),
         "10".to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let status = run_cli_status(&args).await;
@@ -265,9 +287,14 @@ async fn test_cli_https_input_to_file() {
         "--https-input-allow-invalid-hostnames".to_string(),
         "--file-output".to_string(),
         output_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
-    let _ = tokio::time::timeout(Duration::from_millis(600), run_cli_status(&args)).await;
+    // Spawn CLI child process and kill after data is retrieved
+    let mut child = spawn_cli_child(&args);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 
     assert!(output_file.path.exists());
     let written = tokio::fs::read(&output_file.path).await.unwrap();
@@ -289,6 +316,7 @@ async fn test_cli_file_to_https_output() {
         "10".to_string(),
         "--https-output-allow-invalid-certificates".to_string(),
         "--https-output-allow-invalid-hostnames".to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let status = run_cli_status(&args).await;
@@ -311,6 +339,7 @@ async fn test_cli_multi_output_fan_out() {
         "--file-output".to_string(),
         out_file.path.to_str().unwrap().to_string(),
         "--stdout-output".to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let output = run_cli_output(&args).await;
@@ -336,6 +365,7 @@ async fn test_cli_inline_encryption_pipeline() {
         key_str.clone(),
         "--file-output".to_string(),
         encrypted_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let enc_status = run_cli_status(&enc_args).await;
@@ -355,6 +385,7 @@ async fn test_cli_inline_encryption_pipeline() {
         key_str,
         "--file-output".to_string(),
         decrypted_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let dec_status = run_cli_status(&dec_args).await;
@@ -384,6 +415,7 @@ async fn test_cli_tcp_encrypted_stream() {
         key_str.clone(),
         "--file-output".to_string(),
         output_file.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
 
     let send_args = vec![
@@ -393,6 +425,7 @@ async fn test_cli_tcp_encrypted_stream() {
         key_str,
         "--tcp-output".to_string(),
         tcp_addr.clone(),
+        "--no-metrics".to_string(),
     ];
 
     let receiver = tokio::spawn(async move { run_cli_status(&listen_args).await });
@@ -424,6 +457,7 @@ async fn test_cli_encrypt_generate_key() {
         "--encrypt-generate-key".to_string(),
         "--file-output".to_string(),
         temp_out.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let output = run_cli_output(&args).await;
 

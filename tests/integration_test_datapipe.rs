@@ -33,23 +33,25 @@ fn get_temp_dir() -> PathBuf {
 #[cfg(test)]
 async fn run_datapipe_status(args: &[String]) -> std::process::ExitStatus {
     let datapipe_pathbuf = get_datapipe_binary().unwrap();
-    Command::new(datapipe_pathbuf)
-        .args(args)
-        .spawn()
-        .unwrap()
-        .wait()
-        .await
-        .unwrap()
+    let mut cmd = Command::new(datapipe_pathbuf);
+    cmd.args(args);
+    cmd.kill_on_drop(true);
+    let mut child = cmd.spawn().unwrap();
+    child.wait().await.unwrap()
 }
 
 #[cfg(test)]
 async fn run_datapipe_output(args: &[String]) -> std::process::Output {
     let datapipe_pathbuf = get_datapipe_binary().unwrap();
-    Command::new(datapipe_pathbuf)
-        .args(args)
-        .output()
-        .await
-        .unwrap()
+    let mut cmd = Command::new(datapipe_pathbuf);
+    cmd.args(args);
+    cmd.kill_on_drop(true);
+    let child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.wait_with_output().await.unwrap()
 }
 
 #[cfg(test)]
@@ -75,6 +77,7 @@ async fn integration_test_copy_file() {
         test_document_pathbuf.to_str().unwrap().to_string(),
         "--file-output".to_string(),
         output_file_path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     run_datapipe(args).await;
     // verify file copy worked
@@ -110,25 +113,20 @@ async fn integration_test_uucp_file() {
         test_document_pathbuf.to_str().unwrap().to_string(),
         "--tcp-output".to_string(),
         tcp_address.clone(),
-        //"--keep-logs".to_string(),
+        "--no-metrics".to_string(),
     ];
     let args2 = vec![
         "--tcp-listen-input".to_string(),
         tcp_address.clone(),
         "--file-output".to_string(),
         output_file_path.to_str().unwrap().to_string(),
-        //"--keep-logs".to_string(),
+        "--no-metrics".to_string(),
     ];
     children.push(tokio::spawn(run_datapipe(args2)));
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     children.push(tokio::spawn(run_datapipe(args1)));
     for child in children {
-        match child.await {
-            Ok(()) => {}
-            Err(error) => {
-                eprintln!("{error}");
-            }
-        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), child).await;
     }
     // verify file copy worked
     assert!(output_file_path.exists());
@@ -157,7 +155,6 @@ async fn integration_test_weak_scp_file() {
     // "scp" a file using two datapipe instances
     let encryption_key = EncryptionKey::generate();
     let encryption_key_string = encryption_key.to_string();
-    //println!("Encryption key is: {}; it has length {}", encryption_key_string, encryption_key_string.len());
     let port = get_unused_port().await.unwrap();
     println!("scp using port {port}");
     let tcp_address = format!("localhost:{}", port);
@@ -169,7 +166,7 @@ async fn integration_test_weak_scp_file() {
         encryption_key_string.clone(),
         "--tcp-output".to_string(),
         tcp_address.clone(),
-        //"--keep-logs".to_string(),
+        "--no-metrics".to_string(),
     ];
     let args2 = vec![
         "--tcp-listen-input".to_string(),
@@ -178,18 +175,13 @@ async fn integration_test_weak_scp_file() {
         encryption_key_string,
         "--file-output".to_string(),
         output_file_path.to_str().unwrap().to_string(),
-        //"--keep-logs".to_string(),
+        "--no-metrics".to_string(),
     ];
     children.push(tokio::spawn(run_datapipe(args2)));
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     children.push(tokio::spawn(run_datapipe(args1)));
     for child in children {
-        match child.await {
-            Ok(()) => {}
-            Err(error) => {
-                eprintln!("{error}");
-            }
-        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), child).await;
     }
     // verify file copy worked
     assert!(output_file_path.exists());
@@ -218,7 +210,6 @@ async fn integration_test_strong_scp_file() {
     // "scp" a file using two datapipe instances
     let encryption_key = EncryptionKey::generate();
     let encryption_key_string = encryption_key.to_string();
-    //println!("Encryption key is: {}; it has length {}", encryption_key_string, encryption_key_string.len());
     let port = get_unused_port().await.unwrap();
     println!("scp using port {port}");
     let tcp_address = format!("localhost:{}", port);
@@ -231,7 +222,7 @@ async fn integration_test_strong_scp_file() {
         "--tls-output".to_string(),
         tcp_address.clone(),
         "--tls-output-skip-server-verify".to_string(),
-        "--keep-logs".to_string(),
+        "--no-metrics".to_string(),
     ];
     let args2 = vec![
         "--tls-listen-input".to_string(),
@@ -242,18 +233,13 @@ async fn integration_test_strong_scp_file() {
         encryption_key_string,
         "--file-output".to_string(),
         output_file_path.to_str().unwrap().to_string(),
-        "--keep-logs".to_string(),
+        "--no-metrics".to_string(),
     ];
     children.push(tokio::spawn(run_datapipe(args2)));
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     children.push(tokio::spawn(run_datapipe(args1)));
     for child in children {
-        match child.await {
-            Ok(()) => {}
-            Err(error) => {
-                eprintln!("{error}");
-            }
-        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), child).await;
     }
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     // verify file copy worked
@@ -276,7 +262,7 @@ async fn integration_test_verify_config_valid() {
     let output_file_path = temp_dir_pathbuf.join(format!("{}.pdf", generate_random_string(16)));
 
     let toml_content = format!(
-        "[input]\nfile_input = {:?}\n\n[output]\nfile_output = {:?}\n",
+        "[input]\nfile_input = {:?}\n\n[output]\nfile_output = {:?}\n\nno_metrics = true\n",
         test_document_pathbuf, output_file_path
     );
     tokio::fs::write(&config_path, toml_content).await.unwrap();
@@ -324,6 +310,7 @@ async fn integration_test_save_to_config() {
         output_file_path.to_str().unwrap().to_string(),
         "--save-to-config".to_string(),
         config_path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_datapipe_status(&args).await;
     assert!(status.success());
@@ -348,7 +335,7 @@ async fn integration_test_use_config_file_copy() {
     let output_file_path = temp_dir_pathbuf.join(format!("{}.pdf", generate_random_string(16)));
 
     let toml_content = format!(
-        "[input]\nfile_input = {:?}\n\n[output]\nfile_output = {:?}\n",
+        "[input]\nfile_input = {:?}\n\n[output]\nfile_output = {:?}\n\nno_metrics = true\n",
         test_document_pathbuf, output_file_path
     );
     tokio::fs::write(&config_path, toml_content).await.unwrap();
@@ -356,6 +343,7 @@ async fn integration_test_use_config_file_copy() {
     let args = vec![
         "--use-config".to_string(),
         config_path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     run_datapipe(args).await;
 

@@ -302,6 +302,7 @@ async fn test_cli_missing_output() {
     let args = vec![
         "--file-input".to_string(),
         test_doc.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -313,6 +314,7 @@ async fn test_cli_missing_input() {
     let args = vec![
         "--file-output".to_string(),
         temp_out.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -329,6 +331,7 @@ async fn test_cli_multiple_inputs_conflict() {
         "--stdin-input".to_string(),
         "--file-output".to_string(),
         temp_out.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -342,6 +345,7 @@ async fn test_cli_nonexistent_input_file() {
         "/nonexistent/datapipe/input_file.dat".to_string(),
         "--file-output".to_string(),
         temp_out.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -357,6 +361,7 @@ async fn test_cli_tcp_connection_refused() {
         format!("127.0.0.1:{}", port),
         "--file-output".to_string(),
         temp_out.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -371,6 +376,7 @@ async fn test_cli_http_input_missing_rate() {
         // missing --http-input-rate
         "--file-output".to_string(),
         temp_out.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -385,6 +391,7 @@ async fn test_cli_https_input_missing_rate() {
         // missing --https-input-rate
         "--file-output".to_string(),
         temp_out.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -402,6 +409,7 @@ async fn test_cli_invalid_encryption_key_length() {
         "invalid_short_key".to_string(),
         "--file-output".to_string(),
         temp_out.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -419,6 +427,7 @@ async fn test_cli_invalid_decryption_key_length() {
         "invalid_short_key".to_string(),
         "--file-output".to_string(),
         temp_out.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -439,6 +448,7 @@ file_output = "/tmp/out.dat"
         cfg.path.to_str().unwrap().to_string(),
         "--file-input".to_string(),
         "/tmp/conflict.dat".to_string(),
+        "--no-metrics".to_string(),
     ];
     let status = run_cli_status(&args).await;
     assert!(!status.success());
@@ -477,6 +487,7 @@ async fn test_cli_save_to_config_missing_io() {
     let args = vec![
         "--save-to-config".to_string(),
         temp_cfg.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
     ];
     assert!(!run_cli_status(&args).await.success());
 }
