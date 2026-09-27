@@ -13,6 +13,7 @@ pub mod http_writer;
 pub mod https_reader;
 pub mod https_writer;
 pub mod logger;
+pub mod metrics;
 pub mod parameters;
 pub mod reader;
 pub mod stdin_reader;

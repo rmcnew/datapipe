@@ -1,10 +1,12 @@
 use crate::datapipe_types::DatapipeError;
 use crate::encryption::{StreamDecryptor, StreamEncryptor};
+use crate::metrics::DatapipeMetrics;
 use crate::reader::Reader;
 use crate::writer::Writer;
 use log::error;
 
 /// Parameters needed to run datapipe
+#[derive(Debug)]
 pub struct Parameters {
     /// Reader that will be used as the data source
     pub reader: Reader,
@@ -14,6 +16,8 @@ pub struct Parameters {
     pub maybe_encryptor: Option<StreamEncryptor>,
     /// Writer(s) that will be used as the data sinks
     pub writers: Vec<Writer>,
+    /// Optional metrics tracking instance
+    pub metrics: Option<DatapipeMetrics>,
 }
 
 impl std::default::Default for Parameters {
@@ -23,6 +27,7 @@ impl std::default::Default for Parameters {
             maybe_decryptor: None,
             maybe_encryptor: None,
             writers: vec![Writer::default()],
+            metrics: None,
         }
     }
 }
@@ -50,6 +55,8 @@ pub struct ParametersBuilder {
     maybe_encryptor: Option<StreamEncryptor>,
     /// Writer(s) that will be used as the data sinks
     writers: Vec<Writer>,
+    /// Optional metrics tracking instance
+    metrics: Option<DatapipeMetrics>,
 }
 
 impl ParametersBuilder {
@@ -60,6 +67,7 @@ impl ParametersBuilder {
             maybe_decryptor: None,
             maybe_encryptor: None,
             writers: Vec::new(),
+            metrics: None,
         }
     }
 
@@ -87,6 +95,12 @@ impl ParametersBuilder {
         self
     }
 
+    /// set the pipeline metrics tracker
+    pub fn metrics(mut self, metrics: DatapipeMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
     /// build Parameters from this ParametersBuilder
     pub fn build(self) -> Result<Parameters, DatapipeError> {
         if self.maybe_reader.is_none() {
@@ -111,6 +125,7 @@ impl ParametersBuilder {
             maybe_decryptor: self.maybe_decryptor,
             maybe_encryptor: self.maybe_encryptor,
             writers: self.writers,
+            metrics: self.metrics,
         })
     }
 }

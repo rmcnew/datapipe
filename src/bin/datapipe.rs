@@ -98,7 +98,11 @@ async fn main() -> ExitCode {
             eprintln!("Configuration validation error: {error}");
             return ExitCode::FAILURE;
         }
+        let cli_no_metrics = args.no_metrics;
         args = ProgramArgs::from(config);
+        if cli_no_metrics {
+            args.no_metrics = true;
+        }
     } else {
         // Standard CLI execution without config file
         if let Err(error) = args.validate() {
@@ -119,17 +123,46 @@ async fn main() -> ExitCode {
         }
     };
     info!("Args are: {:?}", args);
-    match args.to_parameters().await {
-        Ok(parameters) => match run_datapipe(parameters).await {
+
+    let parameters = match args.to_parameters().await {
+        Ok(parameters) => parameters,
+        Err(err) => {
+            eprintln!("{}", err);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if !args.no_metrics {
+        if let Some(ref metrics) = parameters.metrics {
+            let display_guard = datapipe::metrics::LiveDisplayGuard::start(
+                metrics.clone(),
+                std::time::Duration::from_millis(250),
+            );
+            let run_result = run_datapipe(parameters).await;
+            display_guard.stop().await;
+            match run_result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("{}", err);
+                    ExitCode::FAILURE
+                }
+            }
+        } else {
+            match run_datapipe(parameters).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("{}", err);
+                    ExitCode::FAILURE
+                }
+            }
+        }
+    } else {
+        match run_datapipe(parameters).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("{}", err);
                 ExitCode::FAILURE
             }
-        },
-        Err(err) => {
-            eprintln!("{}", err);
-            ExitCode::FAILURE
         }
     }
 }

@@ -477,6 +477,10 @@ pub struct ProgramArgs {
     #[arg(long = "verify-config", group = "config_action")]
     pub verify_config: Option<PathBuf>,
 
+    /// Disable metrics tracking and live display
+    #[arg(long = "no-metrics", default_value_t = false)]
+    pub no_metrics: bool,
+
     #[command(flatten)]
     pub input: InputArgs,
     #[command(flatten)]
@@ -1512,12 +1516,18 @@ impl ProgramArgs {
         let writers = self.get_output_writers().await?;
         let maybe_decryptor = self.get_decryption_args()?;
         let maybe_encryptor = self.get_encryption_args()?;
+        let metrics = if self.no_metrics {
+            None
+        } else {
+            Some(crate::metrics::DatapipeMetrics::new())
+        };
 
         Ok(Parameters {
             reader,
             maybe_decryptor,
             maybe_encryptor,
             writers,
+            metrics,
         })
     }
 }

@@ -55,6 +55,9 @@ pub struct DatapipeConfig {
     /// Logging configuration
     #[serde(default, skip_serializing_if = "LoggingArgs::is_empty")]
     pub logging_args: LoggingArgs,
+    /// Disable metrics tracking and live display
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_metrics: bool,
 }
 
 impl DatapipeConfig {
@@ -374,6 +377,7 @@ impl From<&ProgramArgs> for DatapipeConfig {
             https_output: args.https_output.clone(),
             tls_output: args.tls_output.clone(),
             logging_args: args.logging_args.clone(),
+            no_metrics: args.no_metrics,
         }
     }
 }
@@ -386,6 +390,7 @@ impl From<DatapipeConfig> for ProgramArgs {
             use_config: None,
             save_to_config: None,
             verify_config: None,
+            no_metrics: config.no_metrics,
             input: config.input,
             http_input: config.http_input,
             https_input: config.https_input,
