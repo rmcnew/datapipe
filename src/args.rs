@@ -21,11 +21,9 @@ use clap::{Args, Parser};
 use log::{error, info};
 use rcgen::{CertifiedKey, generate_simple_self_signed};
 use reqwest::{Certificate, Identity, tls::CertificateRevocationList};
-use rustls::pki_types::pem::PemObject;
-use rustls_pemfile::{certs, private_key};
+use rustls_pki_types::pem::{PemObject, SectionKind};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,8 +31,6 @@ use tokio_rustls::rustls::client::WantsClientCert;
 use tokio_rustls::rustls::client::danger::{
     HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
 };
-use tokio_rustls::rustls::pki_types::pem::SectionKind;
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{
     ClientConfig, ConfigBuilder, DigitallySignedStruct, RootCertStore, ServerConfig,
@@ -1537,30 +1533,26 @@ fn get_root_ca(
     tls_root_ca_path: &PathBuf,
     root_cert_store: &mut RootCertStore,
 ) -> Result<(), DatapipeError> {
-    match File::open(tls_root_ca_path) {
-        Ok(tls_root_ca_file) => {
-            let mut root_ca_buffer = BufReader::new(tls_root_ca_file);
-            for maybe_ca in certs(&mut root_ca_buffer) {
-                match maybe_ca {
-                    Ok(ca) => {
-                        match root_cert_store.add(ca) {
-                            Ok(()) => {
-                                // successfully added, keep going
-                            }
-                            Err(error) => {
-                                let error_message = format!(
-                                    "Error adding certificate authority (CA) to root cert store: {}",
-                                    error_root_cause(&error)
-                                );
-                                error!("{error_message}");
-                                return Err(DatapipeError::ValidationError(error_message));
-                            }
-                        }
+    let certs = CertificateDer::pem_file_iter(tls_root_ca_path).map_err(|error| {
+        let error_message = format!(
+            "Cannot open TLS root CA file: {:?}: {}",
+            tls_root_ca_path,
+            error_root_cause(&error)
+        );
+        error!("{error_message}");
+        DatapipeError::InputOutputError(error_message)
+    })?;
+
+    for maybe_ca in certs {
+        match maybe_ca {
+            Ok(ca) => {
+                match root_cert_store.add(ca) {
+                    Ok(()) => {
+                        // successfully added, keep going
                     }
                     Err(error) => {
                         let error_message = format!(
-                            "Error parsing certificate authority (CA) from {:?}: {}",
-                            tls_root_ca_path,
+                            "Error adding certificate authority (CA) to root cert store: {}",
                             error_root_cause(&error)
                         );
                         error!("{error_message}");
@@ -1568,15 +1560,15 @@ fn get_root_ca(
                     }
                 }
             }
-        }
-        Err(error) => {
-            let error_message = format!(
-                "Cannot open TLS root CA file: {:?}: {}",
-                tls_root_ca_path,
-                error_root_cause(&error)
-            );
-            error!("{error_message}");
-            return Err(DatapipeError::InputOutputError(error_message));
+            Err(error) => {
+                let error_message = format!(
+                    "Error parsing certificate authority (CA) from {:?}: {}",
+                    tls_root_ca_path,
+                    error_root_cause(&error)
+                );
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
         }
     }
     Ok(())
@@ -1586,33 +1578,29 @@ fn get_tls_cert_chain(
     tls_cert_chain_path: &PathBuf,
 ) -> Result<Vec<CertificateDer<'static>>, DatapipeError> {
     let mut cert_chain = Vec::new();
-    match File::open(tls_cert_chain_path) {
-        Ok(tls_cert_chain_file) => {
-            let mut cert_chain_buffer = BufReader::new(tls_cert_chain_file);
-            for maybe_cert in certs(&mut cert_chain_buffer) {
-                match maybe_cert {
-                    Ok(cert) => {
-                        cert_chain.push(cert);
-                    }
-                    Err(error) => {
-                        let error_message = format!(
-                            "Error adding certificate to certificate chain: {}",
-                            error_root_cause(&error)
-                        );
-                        error!("{error_message}");
-                        return Err(DatapipeError::InputOutputError(error_message));
-                    }
-                }
+    let certs = CertificateDer::pem_file_iter(tls_cert_chain_path).map_err(|error| {
+        let error_message = format!(
+            "Cannot open TLS certificate chain file: {:?}: {}",
+            tls_cert_chain_path,
+            error_root_cause(&error)
+        );
+        error!("{error_message}");
+        DatapipeError::InputOutputError(error_message)
+    })?;
+
+    for maybe_cert in certs {
+        match maybe_cert {
+            Ok(cert) => {
+                cert_chain.push(cert);
             }
-        }
-        Err(error) => {
-            let error_message = format!(
-                "Cannot open TLS certificate chain file: {:?}: {}",
-                tls_cert_chain_path,
-                error_root_cause(&error)
-            );
-            error!("{error_message}");
-            return Err(DatapipeError::InputOutputError(error_message));
+            Err(error) => {
+                let error_message = format!(
+                    "Error adding certificate to certificate chain: {}",
+                    error_root_cause(&error)
+                );
+                error!("{error_message}");
+                return Err(DatapipeError::InputOutputError(error_message));
+            }
         }
     }
     Ok(cert_chain)
@@ -1621,46 +1609,35 @@ fn get_tls_cert_chain(
 fn get_tls_private_key(
     tls_private_key_path: &PathBuf,
 ) -> Result<PrivateKeyDer<'static>, DatapipeError> {
-    let private_key_der: PrivateKeyDer<'static>;
-    match File::open(tls_private_key_path) {
-        Ok(tls_private_key_file) => {
-            let mut private_key_buffer = BufReader::new(tls_private_key_file);
-            match private_key(&mut private_key_buffer) {
-                Ok(maybe_private_key_der) => match maybe_private_key_der {
-                    Some(der) => {
-                        private_key_der = der;
-                    }
-                    None => {
-                        let error_message = format!(
-                            "Private key not found in file: {:?}; file must be in PEM format",
-                            tls_private_key_path
-                        );
-                        error!("{error_message}");
-                        return Err(DatapipeError::ValidationError(error_message));
-                    }
-                },
-                Err(error) => {
-                    let error_message = format!(
-                        "Invalid or corrupted TLS private key file: {:?}: {}",
-                        tls_private_key_path,
-                        error_root_cause(&error)
-                    );
-                    error!("{error_message}");
-                    return Err(DatapipeError::ValidationError(error_message));
-                }
-            }
-        }
-        Err(error) => {
+    match PrivateKeyDer::from_pem_file(tls_private_key_path) {
+        Ok(private_key_der) => Ok(private_key_der),
+        Err(rustls_pki_types::pem::Error::Io(error)) => {
             let error_message = format!(
                 "Cannot open TLS private key file: {:?}: {}",
                 tls_private_key_path,
                 error_root_cause(&error)
             );
             error!("{error_message}");
-            return Err(DatapipeError::InputOutputError(error_message));
+            Err(DatapipeError::InputOutputError(error_message))
+        }
+        Err(rustls_pki_types::pem::Error::NoItemsFound) => {
+            let error_message = format!(
+                "Private key not found in file: {:?}; file must be in PEM format",
+                tls_private_key_path
+            );
+            error!("{error_message}");
+            Err(DatapipeError::ValidationError(error_message))
+        }
+        Err(error) => {
+            let error_message = format!(
+                "Invalid or corrupted TLS private key file: {:?}: {}",
+                tls_private_key_path,
+                error_root_cause(&error)
+            );
+            error!("{error_message}");
+            Err(DatapipeError::ValidationError(error_message))
         }
     }
-    Ok(private_key_der)
 }
 
 /// Create a custom NO-OP verifier to allow --tls-skip-server-verify to work
