@@ -30,4 +30,4 @@ tokio = { version = "1.41.1", features = ["full"] }
 tokio-rustls = { version = "0.26.0", default-features = false, features = ["ring"] }
 toml = "0.8"
 url = { version = "2.5.3", features = ["serde"] }
-webpki-roots = "0.26.6"
+webpki-roots = "1.0.9"
