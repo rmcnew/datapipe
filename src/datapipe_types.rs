@@ -2,7 +2,7 @@
 use bytes::Bytes;
 use log::error;
 use rand::distr::Alphanumeric;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use std::io::{Error, ErrorKind};
 use url::Url;
 
