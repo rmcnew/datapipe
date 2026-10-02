@@ -1,7 +1,7 @@
 // various utilities
 use crate::datapipe_types::DatapipeError;
 use rand::distr::Uniform;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use std::path::Path;
 use std::string::ToString;
 use tokio::net::TcpSocket;
