@@ -4,7 +4,7 @@ This document provides an overview of the `datapipe` codebase and outlines manda
 
 ---
 
-## 1. Mandatory Compliance with `rust.instructions.md`
+## 1. Mandatory Compliance with `rust-instructions.md`
 
 > [!IMPORTANT]
 > **ALL Rust code written, modified, refactored, or reviewed in this repository MUST strictly comply with the requirements, conventions, and patterns defined in [`rust.instructions.md`](file:///workspaces/datapipe/rust.instructions.md).**
