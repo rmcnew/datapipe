@@ -8,7 +8,6 @@
 use datapipe::datapipe_types::{DatapipeError, generate_random_string};
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::PrivateKeyDer;
-use rustls::pki_types::pem::{PemObject, SectionKind};
 use std::fs::File;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -302,9 +301,7 @@ impl MockHttpsServer {
 
         let cert_der = cert_key.cert.der().clone();
         let cert_pem = cert_key.cert.pem();
-        let key_der =
-            PrivateKeyDer::from_pem(SectionKind::PrivateKey, cert_key.key_pair.serialize_der())
-                .expect("Failed to parse private key DER");
+        let key_der = PrivateKeyDer::from(cert_key.signing_key);
 
         let cert_guard = TempFileGuard::with_content("pem", cert_pem.as_bytes());
         let cert_pem_path = cert_guard.path.clone();

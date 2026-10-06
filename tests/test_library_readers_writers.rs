@@ -30,7 +30,6 @@ use datapipe::udp_writer::UdpWriter;
 use datapipe::utilities::get_unused_port;
 use datapipe::writer::Writer;
 use rcgen::generate_simple_self_signed;
-use rustls::pki_types::pem::{PemObject, SectionKind};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,9 +95,7 @@ fn create_test_tls_server_config() -> ServerConfig {
         generate_simple_self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
             .expect("Failed to generate self-signed cert");
     let cert_der = cert_key.cert.der().clone();
-    let key_der =
-        PrivateKeyDer::from_pem(SectionKind::PrivateKey, cert_key.key_pair.serialize_der())
-            .expect("Failed to parse private key");
+    let key_der = PrivateKeyDer::from(cert_key.signing_key);
 
     ServerConfig::builder()
         .with_no_client_auth()

@@ -19,9 +19,9 @@ use crate::udp_writer::UdpWriter;
 use crate::writer::Writer;
 use clap::{Args, Parser};
 use log::{error, info};
-use rcgen::{CertifiedKey, generate_simple_self_signed};
+use rcgen::{CertifiedKey, KeyPair, generate_simple_self_signed};
 use reqwest::{Certificate, Identity, tls::CertificateRevocationList};
-use rustls_pki_types::pem::{PemObject, SectionKind};
+use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -975,7 +975,7 @@ impl ProgramArgs {
         }
     }
 
-    fn generate_self_signed(&self) -> Result<CertifiedKey, DatapipeError> {
+    fn generate_self_signed(&self) -> Result<CertifiedKey<KeyPair>, DatapipeError> {
         let hostname = crate::utilities::hostname();
         let subject_alt_names = vec![hostname, "localhost".to_string()];
         match generate_simple_self_signed(subject_alt_names) {
@@ -991,27 +991,19 @@ impl ProgramArgs {
     fn get_tls_listen_input_config(&self) -> Result<ServerConfig, DatapipeError> {
         let maybe_cert_chain = self.get_tls_listen_input_certificate_chain()?;
         let maybe_server_key = self.get_tls_listen_input_server_key()?;
-        let mut cert_chain: Vec<CertificateDer>;
-        let server_key: PrivateKeyDer;
-        if maybe_cert_chain.is_none() && maybe_server_key.is_none() {
-            // generate a self-signed cert and keys
-            let CertifiedKey { cert, key_pair } = self.generate_self_signed()?;
-            cert_chain = Vec::new();
-            cert_chain.push(cert.der().clone());
-            match PrivateKeyDer::from_pem(SectionKind::PrivateKey, key_pair.serialize_der()) {
-                Some(private_key) => {
-                    server_key = private_key;
-                }
-                None => {
-                    let error_message = "Error generating self-signed certificate: Could not convert generated private key to needed format!";
-                    error!("{error_message}");
-                    return Err(DatapipeError::ConfigurationError(error_message.to_string()));
-                }
+        let (cert_chain, server_key) = match (maybe_cert_chain, maybe_server_key) {
+            (None, None) => {
+                // generate a self-signed cert and keys
+                let CertifiedKey { cert, signing_key } = self.generate_self_signed()?;
+                (vec![cert.der().clone()], PrivateKeyDer::from(signing_key))
             }
-        } else {
-            cert_chain = maybe_cert_chain.unwrap();
-            server_key = maybe_server_key.unwrap();
-        }
+            (Some(cert_chain), Some(server_key)) => (cert_chain, server_key),
+            _ => {
+                let error_message = "Both certificate chain and server key must be provided together for TLS listen input";
+                error!("{error_message}");
+                return Err(DatapipeError::ConfigurationError(error_message.to_string()));
+            }
+        };
         let server_config = if self.tls_listen_input.tls_listen_input_skip_client_verify {
             ServerConfig::builder()
                 .with_no_client_auth()
