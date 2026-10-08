@@ -353,7 +353,9 @@ pub async fn run_datapipe(parameters: Parameters) -> Result<(), DatapipeError> {
     }
 
     info!("main thread: waiting for child threads to finish");
-    for child in children {
+    let mut guard = ChildrenGuard(children);
+    while !guard.0.is_empty() {
+        let child = guard.0.remove(0);
         match child.await {
             Ok(child_result) => match child_result {
                 Ok(()) => {}
@@ -368,5 +370,16 @@ pub async fn run_datapipe(parameters: Parameters) -> Result<(), DatapipeError> {
             }
         }
     }
+    std::mem::forget(guard);
     Ok(())
+}
+
+struct ChildrenGuard(Vec<tokio::task::JoinHandle<Result<(), DatapipeError>>>);
+
+impl Drop for ChildrenGuard {
+    fn drop(&mut self) {
+        for handle in &self.0 {
+            handle.abort();
+        }
+    }
 }

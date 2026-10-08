@@ -12,6 +12,7 @@ use crate::args::{
     TlsOutputArgs,
 };
 use crate::datapipe_types::{DatapipeError, EncryptionKey, error_root_cause};
+use crate::parameters::Parameters;
 use log::error;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -40,7 +41,7 @@ pub struct DatapipeConfig {
     /// In-line encryption parameters
     #[serde(default, skip_serializing_if = "EncryptionArgs::is_empty")]
     pub encryption_args: EncryptionArgs,
-    /// Output destinations configuration
+    /// Output destinations configuration (single output or default)
     #[serde(default, skip_serializing_if = "OutputArgs::is_empty")]
     pub output: OutputArgs,
     /// Additional HTTP output parameters
@@ -52,12 +53,148 @@ pub struct DatapipeConfig {
     /// Additional TLS output parameters
     #[serde(default, skip_serializing_if = "TlsOutputArgs::is_empty")]
     pub tls_output: TlsOutputArgs,
+    /// Multiple output destinations configuration (supports 1 to 64 outputs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<Vec<OutputDestinationConfig>>,
     /// Logging configuration
     #[serde(default, skip_serializing_if = "LoggingArgs::is_empty")]
     pub logging_args: LoggingArgs,
     /// Disable metrics tracking and live display
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_metrics: bool,
+}
+
+/// Configuration for an individual output destination in a multi-output pipeline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct OutputDestinationConfig {
+    /// Output destination arguments
+    #[serde(default, skip_serializing_if = "OutputArgs::is_empty")]
+    pub output: OutputArgs,
+    /// Additional HTTP output parameters
+    #[serde(default, skip_serializing_if = "HttpOutputArgs::is_empty")]
+    pub http_output: HttpOutputArgs,
+    /// Additional HTTPS output parameters
+    #[serde(default, skip_serializing_if = "HttpsOutputArgs::is_empty")]
+    pub https_output: HttpsOutputArgs,
+    /// Additional TLS output parameters
+    #[serde(default, skip_serializing_if = "TlsOutputArgs::is_empty")]
+    pub tls_output: TlsOutputArgs,
+}
+
+impl OutputDestinationConfig {
+    /// Create a new empty `OutputDestinationConfig`.
+    ///
+    /// # Example
+    /// ```rust
+    /// use datapipe::config::OutputDestinationConfig;
+    ///
+    /// let out = OutputDestinationConfig::new();
+    /// assert!(out.is_empty());
+    /// ```
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if this output destination has no destination configured.
+    ///
+    /// # Example
+    /// ```rust
+    /// use datapipe::config::OutputDestinationConfig;
+    ///
+    /// let out = OutputDestinationConfig::new();
+    /// assert!(out.is_empty());
+    /// ```
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.output.is_empty()
+    }
+
+    /// Validate that this output destination has exactly one sink configured and valid parameters.
+    ///
+    /// # Errors
+    /// Returns [`DatapipeError::ValidationError`] if no output or multiple outputs are configured,
+    /// or if URL schemes or TLS options are inconsistent.
+    ///
+    /// # Example
+    /// ```rust
+    /// use datapipe::config::OutputDestinationConfig;
+    /// use std::path::PathBuf;
+    ///
+    /// # fn main() -> Result<(), datapipe::datapipe_types::DatapipeError> {
+    /// let mut out = OutputDestinationConfig::new();
+    /// out.output.file_output = Some(PathBuf::from("out.txt"));
+    /// out.validate()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn validate(&self) -> Result<(), DatapipeError> {
+        let mut output_count = 0;
+        if self.output.file_output.is_some() {
+            output_count += 1;
+        }
+        if self.output.http_output.is_some() {
+            output_count += 1;
+        }
+        if self.output.https_output.is_some() {
+            output_count += 1;
+        }
+        if self.output.stdout_output {
+            output_count += 1;
+        }
+        if self.output.tcp_output.is_some() {
+            output_count += 1;
+        }
+        if self.output.tls_output.is_some() {
+            output_count += 1;
+        }
+        if self.output.udp_output.is_some() {
+            output_count += 1;
+        }
+
+        if output_count == 0 {
+            let error_message =
+                "No output destination configured! Each output block must specify a destination."
+                    .to_string();
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+        if output_count > 1 {
+            let error_message = format!(
+                "Multiple output destinations configured ({output_count}) in a single output block! Exactly one destination must be specified per block."
+            );
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+
+        if let Some(ref url) = self.output.http_output
+            && !url.starts_with("http://")
+        {
+            let error_message = format!("HTTP output URL '{url}' must start with 'http://'");
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+        if let Some(ref url) = self.output.https_output
+            && !url.starts_with("https://")
+        {
+            let error_message = format!("HTTPS output URL '{url}' must start with 'https://'");
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+
+        if self.output.tls_output.is_some()
+            && self.tls_output.tls_output_cert_chain.is_some()
+                != self.tls_output.tls_output_client_key.is_some()
+        {
+            let error_message =
+                "Both TLS output certificate chain and client key must be specified together if either is used."
+                    .to_string();
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+
+        Ok(())
+    }
 }
 
 impl DatapipeConfig {
@@ -241,38 +378,90 @@ impl DatapipeConfig {
         }
 
         // Validate output: at least one output destination
-        let mut output_count = 0;
-        if self.output.file_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.http_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.https_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.stdout_output {
-            output_count += 1;
-        }
-        if self.output.tcp_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.tls_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.udp_output.is_some() {
-            output_count += 1;
+        if let Some(ref outputs) = self.outputs {
+            if outputs.is_empty() && self.output.is_empty() {
+                let error_message =
+                    "No output destination provided! At least one output destination must be configured."
+                        .to_string();
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
+            if outputs.len() > 64 {
+                let error_message = format!(
+                    "Maximum number of outputs is 64; provided {}",
+                    outputs.len()
+                );
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
+            for (idx, out) in outputs.iter().enumerate() {
+                out.validate().map_err(|err| {
+                    let error_message = format!("Output #{} validation error: {err}", idx + 1);
+                    error!("{error_message}");
+                    DatapipeError::ValidationError(error_message)
+                })?;
+            }
+        } else {
+            let mut output_count = 0;
+            if self.output.file_output.is_some() {
+                output_count += 1;
+            }
+            if self.output.http_output.is_some() {
+                output_count += 1;
+            }
+            if self.output.https_output.is_some() {
+                output_count += 1;
+            }
+            if self.output.stdout_output {
+                output_count += 1;
+            }
+            if self.output.tcp_output.is_some() {
+                output_count += 1;
+            }
+            if self.output.tls_output.is_some() {
+                output_count += 1;
+            }
+            if self.output.udp_output.is_some() {
+                output_count += 1;
+            }
+
+            if output_count == 0 {
+                let error_message =
+                    "No output destination provided! At least one output destination must be configured."
+                        .to_string();
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
+
+            if let Some(ref url) = self.output.http_output
+                && !url.starts_with("http://")
+            {
+                let error_message = format!("HTTP output URL '{url}' must start with 'http://'");
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
+            if let Some(ref url) = self.output.https_output
+                && !url.starts_with("https://")
+            {
+                let error_message = format!("HTTPS output URL '{url}' must start with 'https://'");
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
+
+            // Validate TLS output options consistency
+            if self.output.tls_output.is_some()
+                && self.tls_output.tls_output_cert_chain.is_some()
+                    != self.tls_output.tls_output_client_key.is_some()
+            {
+                let error_message =
+                    "Both TLS output certificate chain and client key must be specified together if either is used."
+                        .to_string();
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
         }
 
-        if output_count == 0 {
-            let error_message =
-                "No output destination provided! At least one output destination must be configured."
-                    .to_string();
-            error!("{error_message}");
-            return Err(DatapipeError::ValidationError(error_message));
-        }
-
-        // Validate URL prefixes
+        // Validate URL prefixes for inputs
         if let Some(ref url) = self.input.http_input
             && !url.starts_with("http://")
         {
@@ -287,20 +476,6 @@ impl DatapipeConfig {
             error!("{error_message}");
             return Err(DatapipeError::ValidationError(error_message));
         }
-        if let Some(ref url) = self.output.http_output
-            && !url.starts_with("http://")
-        {
-            let error_message = format!("HTTP output URL '{url}' must start with 'http://'");
-            error!("{error_message}");
-            return Err(DatapipeError::ValidationError(error_message));
-        }
-        if let Some(ref url) = self.output.https_output
-            && !url.starts_with("https://")
-        {
-            let error_message = format!("HTTPS output URL '{url}' must start with 'https://'");
-            error!("{error_message}");
-            return Err(DatapipeError::ValidationError(error_message));
-        }
 
         // Validate TLS input options consistency
         if self.input.tls_input.is_some()
@@ -309,18 +484,6 @@ impl DatapipeConfig {
         {
             let error_message =
                 "Both TLS input certificate chain and client key must be specified together if either is used."
-                    .to_string();
-            error!("{error_message}");
-            return Err(DatapipeError::ValidationError(error_message));
-        }
-
-        // Validate TLS output options consistency
-        if self.output.tls_output.is_some()
-            && self.tls_output.tls_output_cert_chain.is_some()
-                != self.tls_output.tls_output_client_key.is_some()
-        {
-            let error_message =
-                "Both TLS output certificate chain and client key must be specified together if either is used."
                     .to_string();
             error!("{error_message}");
             return Err(DatapipeError::ValidationError(error_message));
@@ -360,6 +523,66 @@ impl DatapipeConfig {
 
         Ok(())
     }
+
+    /// Converts this configuration into pipeline execution [`Parameters`], supporting 1 to 64 outputs.
+    ///
+    /// # Errors
+    /// Returns [`DatapipeError::ValidationError`] if configuration fails validation, or
+    /// [`DatapipeError::InputOutputError`] if any reader or writer initialization fails.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use datapipe::config::DatapipeConfig;
+    /// use std::path::PathBuf;
+    ///
+    /// # async fn run() -> Result<(), datapipe::datapipe_types::DatapipeError> {
+    /// let mut config = DatapipeConfig::new();
+    /// config.input.file_input = Some(PathBuf::from("in.txt"));
+    /// config.output.file_output = Some(PathBuf::from("out.txt"));
+    /// let params = config.to_parameters().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn to_parameters(&self) -> Result<Parameters, DatapipeError> {
+        self.validate()?;
+        let program_args = ProgramArgs::from(self.clone());
+        let reader = program_args.get_input_reader().await?;
+        let maybe_decryptor = program_args.get_decryption_args()?;
+        let maybe_encryptor = program_args.get_encryption_args()?;
+
+        let mut writers = Vec::new();
+        if let Some(ref dests) = self.outputs
+            && !dests.is_empty()
+        {
+            for dest in dests {
+                let out_args = ProgramArgs {
+                    output: dest.output.clone(),
+                    http_output: dest.http_output.clone(),
+                    https_output: dest.https_output.clone(),
+                    tls_output: dest.tls_output.clone(),
+                    ..Default::default()
+                };
+                let mut dest_writers = out_args.get_output_writers().await?;
+                writers.append(&mut dest_writers);
+            }
+        } else {
+            writers = program_args.get_output_writers().await?;
+        }
+
+        let metrics = if self.no_metrics {
+            None
+        } else {
+            Some(crate::metrics::DatapipeMetrics::new())
+        };
+
+        Ok(Parameters {
+            reader,
+            maybe_decryptor,
+            maybe_encryptor,
+            writers,
+            metrics,
+        })
+    }
 }
 
 impl From<&ProgramArgs> for DatapipeConfig {
@@ -376,6 +599,7 @@ impl From<&ProgramArgs> for DatapipeConfig {
             http_output: args.http_output.clone(),
             https_output: args.https_output.clone(),
             tls_output: args.tls_output.clone(),
+            outputs: None,
             logging_args: args.logging_args.clone(),
             no_metrics: args.no_metrics,
         }
@@ -464,6 +688,42 @@ mod tests {
         let mut config = DatapipeConfig::new();
         config.input.http_input = Some("ftp://bad-url.org".to_string());
         config.output.file_output = Some(PathBuf::from("destination.dat"));
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_multi_output_roundtrip() -> Result<(), DatapipeError> {
+        let mut config = DatapipeConfig::new();
+        config.input.file_input = Some(PathBuf::from("source.dat"));
+
+        let mut out1 = OutputDestinationConfig::new();
+        out1.output.file_output = Some(PathBuf::from("dest1.dat"));
+
+        let mut out2 = OutputDestinationConfig::new();
+        out2.output.stdout_output = true;
+
+        config.outputs = Some(vec![out1, out2]);
+
+        let toml_str = config.to_toml_string()?;
+        let parsed_config = DatapipeConfig::from_toml_str(&toml_str)?;
+
+        assert_eq!(config, parsed_config);
+        config.validate()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_multi_output_exceeds_max() {
+        let mut config = DatapipeConfig::new();
+        config.input.file_input = Some(PathBuf::from("source.dat"));
+
+        let mut outs = Vec::new();
+        for i in 0..65 {
+            let mut out = OutputDestinationConfig::new();
+            out.output.file_output = Some(PathBuf::from(format!("dest_{i}.dat")));
+            outs.push(out);
+        }
+        config.outputs = Some(outs);
         assert!(config.validate().is_err());
     }
 }

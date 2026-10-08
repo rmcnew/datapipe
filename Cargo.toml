@@ -31,3 +31,21 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring"]
 toml = "1"
 url = { version = "2", features = ["serde"] }
 webpki-roots = "1"
+
+# Optional GUI dependencies
+eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wayland", "x11", "glow"], optional = true }
+egui = { version = "0.35", optional = true }
+rfd = { version = "0.17", optional = true }
+
+[features]
+default = []
+gui = ["dep:eframe", "dep:egui", "dep:rfd"]
+
+[[bin]]
+name = "datapipe"
+path = "src/bin/datapipe.rs"
+
+[[bin]]
+name = "datapipe-gui"
+path = "src/bin/datapipe_gui.rs"
+required-features = ["gui"]
