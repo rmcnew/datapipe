@@ -26,3 +26,6 @@ pub mod udp_reader;
 pub mod udp_writer;
 pub mod utilities;
 pub mod writer;
+
+#[cfg(feature = "gui")]
+pub mod gui;

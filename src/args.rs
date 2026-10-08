@@ -1089,7 +1089,7 @@ impl ProgramArgs {
     }
 
     /// Select the wanted input implementation from the command line args
-    async fn get_input_reader(&self) -> Result<Reader, DatapipeError> {
+    pub(crate) async fn get_input_reader(&self) -> Result<Reader, DatapipeError> {
         let mut maybe_reader: Option<Reader> = None;
         if self.input.file_input.is_some() {
             Self::check_reader_set(&maybe_reader)?;
@@ -1436,7 +1436,7 @@ impl ProgramArgs {
         }
     }
 
-    async fn get_output_writers(&self) -> Result<Vec<Writer>, DatapipeError> {
+    pub(crate) async fn get_output_writers(&self) -> Result<Vec<Writer>, DatapipeError> {
         let mut writers: Vec<Writer> = Vec::new();
         if self.output.file_output.is_some() {
             let file_writer = self.handle_file_output().await?;
@@ -1475,7 +1475,7 @@ impl ProgramArgs {
         }
     }
 
-    fn get_encryption_args(&self) -> Result<Option<StreamEncryptor>, DatapipeError> {
+    pub(crate) fn get_encryption_args(&self) -> Result<Option<StreamEncryptor>, DatapipeError> {
         if self.encryption_args.generate_encryption_key {
             let encryption_key = EncryptionKey::generate();
             println!("Generated encryption key: {}", encryption_key);
@@ -1490,7 +1490,7 @@ impl ProgramArgs {
         Ok(None)
     }
 
-    fn get_decryption_args(&self) -> Result<Option<StreamDecryptor>, DatapipeError> {
+    pub(crate) fn get_decryption_args(&self) -> Result<Option<StreamDecryptor>, DatapipeError> {
         if let Some(ref key_str) = self.decryption_args.decryption_key {
             let encryption_key = EncryptionKey::new(key_str)?;
             let decryptor = StreamDecryptor::new(encryption_key)?;
