@@ -579,13 +579,68 @@ impl PipelineStatus {
     }
 }
 
+/// Point-in-time snapshot of pipeline data transfer metrics.
+///
+/// A snapshot is a plain value: once captured it never changes, which allows the
+/// GUI to display frozen elapsed time and transfer rates after a pipeline has
+/// finished, and all-zero values after the configuration is cleared.
+///
+/// # Examples
+///
+/// ```
+/// use datapipe::gui::types::MetricsSnapshot;
+/// use datapipe::metrics::DatapipeMetrics;
+///
+/// let zeroed = MetricsSnapshot::default();
+/// assert_eq!(zeroed.read_bytes, 0);
+///
+/// let metrics = DatapipeMetrics::new();
+/// metrics.reader_bytes.add_bytes(10);
+/// let snapshot = MetricsSnapshot::from_metrics(&metrics);
+/// assert_eq!(snapshot.read_bytes, 10);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct MetricsSnapshot {
+    /// Elapsed pipeline execution time
+    pub elapsed: std::time::Duration,
+    /// Total bytes read by the input reader
+    pub read_bytes: u64,
+    /// Total bytes written by the output writer(s)
+    pub written_bytes: u64,
+    /// Average read rate in bytes per second
+    pub read_rate: f64,
+    /// Average write rate in bytes per second
+    pub write_rate: f64,
+}
+
+impl MetricsSnapshot {
+    /// Captures the current values of the given live metrics.
+    #[must_use]
+    pub fn from_metrics(metrics: &crate::metrics::DatapipeMetrics) -> Self {
+        let elapsed = metrics.elapsed();
+        let read_bytes = metrics.read_bytes();
+        let written_bytes = metrics.written_bytes();
+        let secs = elapsed.as_secs_f64();
+        let rate = |bytes: u64| {
+            if secs > 0.0 { bytes as f64 / secs } else { 0.0 }
+        };
+        Self {
+            elapsed,
+            read_bytes,
+            written_bytes,
+            read_rate: rate(read_bytes),
+            write_rate: rate(written_bytes),
+        }
+    }
+}
+
 /// Asynchronous pipeline event message from background task to GUI.
 #[derive(Debug)]
 pub enum PipelineEvent {
     /// Pipeline has started
     Started,
-    /// Pipeline finished normally or with error
-    Finished(Result<(), String>),
+    /// Pipeline finished normally or with error, with metrics frozen at completion
+    Finished(Result<(), String>, MetricsSnapshot),
 }
 
 /// Helper function to convert GUI states to a [`DatapipeConfig`].
