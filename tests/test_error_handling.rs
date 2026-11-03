@@ -102,6 +102,7 @@ async fn test_lib_tcp_listen_port_already_in_use() {
 
 #[tokio::test]
 async fn test_lib_tls_connection_refused() {
+    common::init_crypto();
     let port: u16 = get_unused_port().await.expect("Failed to get port");
     let addr = format!("127.0.0.1:{}", port);
     let client_config = ClientConfig::builder()

@@ -5,6 +5,7 @@ use reqwest::{Certificate, Identity, tls::CertificateRevocationList};
 use std::io::{Error, ErrorKind};
 use std::time::Duration;
 
+/// Writer that sends delimited chunks securely to an HTTPS endpoint.
 #[derive(Debug)]
 pub struct HttpsWriter {
     client: reqwest::Client,
@@ -18,9 +19,40 @@ pub struct HttpsWriter {
 }
 
 impl HttpsWriter {
+    /// Default payload delimiter (`\n`).
     pub const DEFAULT_DELIMITER: [u8; 1] = *b"\n";
+    /// Default minimum interval between HTTPS writes.
     pub const DEFAULT_WRITE_RATE: Duration = Duration::from_secs(5);
 
+    /// Creates a new [`HttpsWriter`] with the provided TLS verification and client identity options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datapipe::https_writer::HttpsWriter;
+    /// use std::time::Duration;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), std::io::Error> {
+    /// let writer = HttpsWriter::new(
+    ///     "https://127.0.0.1:8443/ingest",
+    ///     HttpsWriter::DEFAULT_DELIMITER.to_vec(),
+    ///     true,
+    ///     Duration::from_secs(1),
+    ///     None,
+    ///     None,
+    ///     None,
+    ///     false,
+    ///     true,
+    /// )?;
+    /// # drop(writer);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`std::io::Error`] if the URL is invalid or the HTTPS client cannot be configured.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         https_output_url: &str,
@@ -35,26 +67,33 @@ impl HttpsWriter {
     ) -> Result<Self, Error> {
         // HTTP client init and configuration
         let url = good_url(https_output_url, "https://")?;
-        let mut client_builder = reqwest::Client::builder()
-            .user_agent("datapipe")
-            .tls_built_in_root_certs(true) // enable system root certs
-            .tls_built_in_webpki_certs(true); // enable webpki root certs
-        if let Some(root_certs) = maybe_root_certs {
-            for cert in root_certs {
-                client_builder = client_builder.add_root_certificate(cert);
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut client_builder = reqwest::Client::builder().user_agent("datapipe");
+        let needs_certs_only =
+            maybe_crls.is_some() || (allow_invalid_hostnames && !allow_invalid_certs);
+        match (maybe_root_certs, needs_certs_only) {
+            (Some(root_certs), true) => {
+                client_builder = client_builder.tls_certs_only(root_certs);
             }
+            (Some(root_certs), false) => {
+                client_builder = client_builder.tls_certs_merge(root_certs);
+            }
+            (None, true) => {
+                client_builder = client_builder.tls_certs_only(std::iter::empty());
+            }
+            (None, false) => {}
         }
         if let Some(crls) = maybe_crls {
-            client_builder = client_builder.add_crls(crls);
+            client_builder = client_builder.tls_crls_only(crls);
         }
         if let Some(identity) = maybe_identity {
             client_builder = client_builder.identity(identity);
         }
         if allow_invalid_hostnames {
-            client_builder = client_builder.danger_accept_invalid_hostnames(true);
+            client_builder = client_builder.tls_danger_accept_invalid_hostnames(true);
         }
         if allow_invalid_certs {
-            client_builder = client_builder.danger_accept_invalid_certs(true);
+            client_builder = client_builder.tls_danger_accept_invalid_certs(true);
         }
         match client_builder.build() {
             Ok(client) => Ok(Self {

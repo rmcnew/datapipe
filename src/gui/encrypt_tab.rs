@@ -28,7 +28,7 @@ pub fn show_encrypt_tab(ui: &mut Ui, state: &mut EncryptState, active_tab: &mut 
     );
     ui.add_space(8.0);
 
-    let copied_id = egui::Id::new("encrypt_key_copied_at");
+    let copied_id = egui::Id::unique("encrypt_key_copied_at");
 
     ui.horizontal(|ui| {
         // Reserve room on the right for the copy button.

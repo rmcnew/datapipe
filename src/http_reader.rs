@@ -5,6 +5,7 @@ use log::{error, trace};
 use reqwest::StatusCode;
 use std::io::{Error, ErrorKind};
 
+/// Reader that polls an HTTP endpoint on a fixed interval.
 #[derive(Debug)]
 pub struct HttpReader {
     client: reqwest::Client,
@@ -13,16 +14,41 @@ pub struct HttpReader {
 }
 
 impl HttpReader {
+    /// Default HTTP polling interval in milliseconds.
     pub const DEFAULT_UPDATE_RATE: u64 = 5000; // milliseconds
 
+    /// Creates a new [`HttpReader`] polling `http_input_url` every `update_rate` milliseconds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datapipe::http_reader::HttpReader;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), std::io::Error> {
+    /// let reader = HttpReader::new("http://127.0.0.1:8080/data", 1000)?;
+    /// # drop(reader);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`std::io::Error`] if the URL is invalid or the HTTP client cannot be built.
     pub fn new(http_input_url: &str, update_rate: u64) -> Result<Self, Error> {
         // HTTP client init and configuration
         let url = good_url(http_input_url, "http://")?;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder()
+            .user_agent("datapipe")
+            .build()
+            .map_err(|error| {
+                let error_message = format!("Error configuring HTTP Input client: {error}");
+                error!("{error_message}");
+                Error::new(ErrorKind::InvalidInput, error_message)
+            })?;
         Ok(Self {
-            client: reqwest::Client::builder()
-                .user_agent("datapipe")
-                .build()
-                .unwrap(),
+            client,
             url,
             update_interval: tokio::time::interval(std::time::Duration::from_millis(update_rate)),
         })
