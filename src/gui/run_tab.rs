@@ -106,6 +106,7 @@ pub fn show_run_tab(ui: &mut Ui, app: &mut crate::gui::DatapipeApp) {
             app.encrypt_state = EncryptState::default();
             app.output_states.clear();
             app.output_states.push(OutputState::default());
+            app.controller.reset_metrics();
             app.last_message = Some(("Configuration cleared.".to_string(), false));
         }
     });
@@ -277,40 +278,37 @@ fn render_status_and_metrics(
         ui.heading("Data Transfer Metrics");
         ui.add_space(4.0);
 
-        if let Some(ref m) = controller.metrics {
-            egui::Grid::new("metrics_display_grid")
-                .num_columns(4)
-                .spacing([24.0, 6.0])
-                .show(ui, |ui| {
-                    ui.label(RichText::new("Elapsed Time:").strong());
-                    ui.label(
-                        RichText::new(format_duration(m.elapsed()))
-                            .size(15.0)
-                            .strong()
-                            .color(Color32::from_rgb(20, 80, 160)),
-                    );
+        let m = controller.metrics_snapshot();
+        egui::Grid::new("metrics_display_grid")
+            .num_columns(4)
+            .spacing([24.0, 6.0])
+            .show(ui, |ui| {
+                ui.label(RichText::new("Elapsed Time:").strong());
+                ui.label(
+                    RichText::new(format_duration(m.elapsed))
+                        .size(15.0)
+                        .strong()
+                        .color(Color32::from_rgb(20, 80, 160)),
+                );
 
-                    ui.label("");
-                    ui.label("");
-                    ui.end_row();
+                ui.label("");
+                ui.label("");
+                ui.end_row();
 
-                    ui.label(RichText::new("Bytes Read:").strong());
-                    ui.label(RichText::new(format_bytes(m.read_bytes())).size(14.0));
+                ui.label(RichText::new("Bytes Read:").strong());
+                ui.label(RichText::new(format_bytes(m.read_bytes)).size(14.0));
 
-                    ui.label(RichText::new("Read Rate:").strong());
-                    ui.label(RichText::new(format_rate(m.read_rate_bytes_per_sec())).size(14.0));
-                    ui.end_row();
+                ui.label(RichText::new("Read Rate:").strong());
+                ui.label(RichText::new(format_rate(m.read_rate)).size(14.0));
+                ui.end_row();
 
-                    ui.label(RichText::new("Bytes Written:").strong());
-                    ui.label(RichText::new(format_bytes(m.written_bytes())).size(14.0));
+                ui.label(RichText::new("Bytes Written:").strong());
+                ui.label(RichText::new(format_bytes(m.written_bytes)).size(14.0));
 
-                    ui.label(RichText::new("Write Rate:").strong());
-                    ui.label(RichText::new(format_rate(m.write_rate_bytes_per_sec())).size(14.0));
-                    ui.end_row();
-                });
-        } else {
-            ui.label("No metrics available. Start the pipeline to begin tracking.");
-        }
+                ui.label(RichText::new("Write Rate:").strong());
+                ui.label(RichText::new(format_rate(m.write_rate)).size(14.0));
+                ui.end_row();
+            });
     });
 }
 

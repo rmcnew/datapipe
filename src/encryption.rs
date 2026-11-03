@@ -1,5 +1,5 @@
 use crate::datapipe_types::{DatapipeError, EncryptionKey};
-use chacha20poly1305::aead::stream::{self, DecryptorBE32, EncryptorBE32};
+use aead_stream::{DecryptorBE32, EncryptorBE32};
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use log::{error, trace, warn};
 
@@ -570,16 +570,38 @@ fn test_encrypt_decrypt() {
     assert_eq!(plain, plain2);
 }
 
+/// Stateful streaming AEAD encryptor backed by [`XChaCha20Poly1305`] and [`EncryptorBE32`].
+///
+/// # Examples
+///
+/// ```
+/// use datapipe::datapipe_types::{DatapipeError, EncryptionKey};
+/// use datapipe::encryption::StreamEncryptor;
+///
+/// # fn main() -> Result<(), DatapipeError> {
+/// let key = EncryptionKey::generate();
+/// let mut encryptor = StreamEncryptor::new(key)?;
+/// let mut plaintext = b"hello world".to_vec();
+/// let ciphertext = encryptor.encrypt(&mut plaintext)?;
+/// assert!(!ciphertext.is_empty());
+/// assert!(plaintext.is_empty());
+/// # Ok(())
+/// # }
+/// ```
 pub struct StreamEncryptor {
     encryptor: EncryptorBE32<XChaCha20Poly1305>,
 }
 
 impl StreamEncryptor {
+    /// Creates a new [`StreamEncryptor`] from the provided [`EncryptionKey`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatapipeError::ValidationError`] if the key slice length is invalid.
     pub fn new(encryption_key: EncryptionKey) -> Result<Self, DatapipeError> {
         match XChaCha20Poly1305::new_from_slice(&encryption_key.key) {
             Ok(aead) => {
-                let encryptor =
-                    stream::EncryptorBE32::from_aead(aead, &encryption_key.nonce.into());
+                let encryptor = EncryptorBE32::from_aead(aead, &encryption_key.nonce.into());
                 Ok(Self { encryptor })
             }
             Err(error) => {
@@ -590,7 +612,13 @@ impl StreamEncryptor {
         }
     }
 
-    /// note that this consumes the contents of clear_data
+    /// Encrypts the next chunk in the stream and frames it with [`MESSAGE_START`] and [`MessageLength`].
+    ///
+    /// Note that this consumes the contents of `clear_data`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatapipeError::EncryptionError`] if AEAD stream encryption fails.
     pub fn encrypt(&mut self, clear_data: &mut Vec<u8>) -> Result<Vec<u8>, DatapipeError> {
         let clear_data_length = clear_data.len();
         trace!("clear_data length is: {clear_data_length}");
@@ -615,16 +643,40 @@ impl std::fmt::Debug for StreamEncryptor {
     }
 }
 
+/// Stateful streaming AEAD decryptor backed by [`XChaCha20Poly1305`] and [`DecryptorBE32`].
+///
+/// # Examples
+///
+/// ```
+/// use datapipe::datapipe_types::{DatapipeError, EncryptionKey};
+/// use datapipe::encryption::{StreamDecryptor, StreamEncryptor};
+///
+/// # fn main() -> Result<(), DatapipeError> {
+/// let key = EncryptionKey::generate();
+/// let mut encryptor = StreamEncryptor::new(key.clone())?;
+/// let mut decryptor = StreamDecryptor::new(key)?;
+///
+/// let mut plaintext = b"hello world".to_vec();
+/// let mut ciphertext = encryptor.encrypt(&mut plaintext)?;
+/// let decrypted = decryptor.decrypt(&mut ciphertext)?;
+/// assert_eq!(decrypted, b"hello world");
+/// # Ok(())
+/// # }
+/// ```
 pub struct StreamDecryptor {
     decryptor: DecryptorBE32<XChaCha20Poly1305>,
 }
 
 impl StreamDecryptor {
+    /// Creates a new [`StreamDecryptor`] from the provided [`EncryptionKey`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatapipeError::ValidationError`] if the key slice length is invalid.
     pub fn new(encryption_key: EncryptionKey) -> Result<Self, DatapipeError> {
         match XChaCha20Poly1305::new_from_slice(&encryption_key.key) {
             Ok(aead) => {
-                let decryptor =
-                    stream::DecryptorBE32::from_aead(aead, &encryption_key.nonce.into());
+                let decryptor = DecryptorBE32::from_aead(aead, &encryption_key.nonce.into());
                 Ok(Self { decryptor })
             }
             Err(error) => {
@@ -678,7 +730,15 @@ impl StreamDecryptor {
         }
     }
 
-    /// note that this consumes as much of the contents of cipher_data as possible
+    /// Decrypts all complete framed messages currently buffered in `cipher_data`.
+    ///
+    /// Note that this consumes as much of the contents of `cipher_data` as possible,
+    /// leaving any trailing incomplete frame buffered in `cipher_data` for subsequent calls.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatapipeError::EncryptionError`] if frame headers are malformed or AEAD
+    /// authentication/decryption fails.
     pub fn decrypt(&mut self, cipher_data: &mut Vec<u8>) -> Result<Vec<u8>, DatapipeError> {
         let mut clear_data: Vec<u8> = Vec::new();
         loop {

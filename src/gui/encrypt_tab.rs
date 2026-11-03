@@ -28,13 +28,43 @@ pub fn show_encrypt_tab(ui: &mut Ui, state: &mut EncryptState, active_tab: &mut 
     );
     ui.add_space(8.0);
 
-    let text_edit = egui::TextEdit::singleline(&mut state.key)
-        .hint_text("Enter or generate exactly 51 UTF-8 bytes...")
-        .desired_width(ui.available_width() - 20.0);
+    let copied_id = egui::Id::unique("encrypt_key_copied_at");
 
-    ui.add_enabled(state.enabled, text_edit);
+    ui.horizontal(|ui| {
+        // Reserve room on the right for the copy button.
+        let text_edit = egui::TextEdit::singleline(&mut state.key)
+            .hint_text("Enter or generate exactly 51 UTF-8 bytes...")
+            .desired_width((ui.available_width() - 90.0).max(100.0));
+
+        ui.add_enabled(state.enabled, text_edit);
+
+        let can_copy = state.enabled && !state.key.is_empty();
+        if ui
+            .add_enabled(can_copy, egui::Button::new("Copy"))
+            .on_hover_text("Copy the encryption key to the system clipboard")
+            .clicked()
+        {
+            ui.ctx().copy_text(state.key.clone());
+            let now = ui.input(|i| i.time);
+            ui.data_mut(|d| d.insert_temp(copied_id, now));
+        }
+    });
 
     ui.add_space(8.0);
+
+    // Briefly confirm a successful copy.
+    if let Some(copied_at) = ui.data(|d| d.get_temp::<f64>(copied_id)) {
+        if ui.input(|i| i.time) - copied_at < 2.0 {
+            ui.label(
+                RichText::new("Encryption key copied to clipboard.")
+                    .color(Color32::from_rgb(0, 100, 180)),
+            );
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
+        } else {
+            ui.data_mut(|d| d.remove::<f64>(copied_id));
+        }
+    }
 
     if state.enabled {
         let byte_count = state.key.len();

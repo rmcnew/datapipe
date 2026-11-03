@@ -4,6 +4,7 @@ use log::{error, trace};
 use std::io::{Error, ErrorKind};
 use std::time::{Duration, Instant};
 
+/// Writer that sends delimited chunks to an HTTP endpoint.
 #[derive(Debug)]
 pub struct HttpWriter {
     client: reqwest::Client,
@@ -18,9 +19,34 @@ pub struct HttpWriter {
 }
 
 impl HttpWriter {
+    /// Default payload delimiter (`\n`).
     pub const DEFAULT_DELIMITER: [u8; 1] = *b"\n";
+    /// Default minimum interval between HTTP writes.
     pub const DEFAULT_WRITE_RATE: Duration = Duration::from_secs(5);
 
+    /// Creates a new [`HttpWriter`] targeting `http_output_url`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datapipe::http_writer::HttpWriter;
+    /// use std::time::Duration;
+    ///
+    /// # fn main() -> Result<(), std::io::Error> {
+    /// let writer = HttpWriter::new(
+    ///     "http://127.0.0.1:8080/ingest",
+    ///     HttpWriter::DEFAULT_DELIMITER.to_vec(),
+    ///     true,
+    ///     Duration::from_millis(500),
+    /// )?;
+    /// # drop(writer);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`std::io::Error`] if the URL is invalid or the HTTP client cannot be built.
     pub fn new(
         http_output_url: &str,
         http_output_delimiter: Vec<u8>,
@@ -29,11 +55,17 @@ impl HttpWriter {
     ) -> Result<Self, Error> {
         // HTTP client init and configuration
         let url = good_url(http_output_url, "http://")?;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder()
+            .user_agent("datapipe")
+            .build()
+            .map_err(|error| {
+                let error_message = format!("Error configuring HTTP Output client: {error}");
+                error!("{error_message}");
+                Error::new(ErrorKind::InvalidInput, error_message)
+            })?;
         Ok(Self {
-            client: reqwest::Client::builder()
-                .user_agent("datapipe")
-                .build()
-                .unwrap(),
+            client,
             url,
             delimiter: http_output_delimiter,
             include_delimiter: http_output_include_delimiter,
