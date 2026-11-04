@@ -1,4 +1,4 @@
-//! Integration tests for the datapipe GUI.
+//! Integration tests for the datapipe Material Design 3 GUI.
 
 #![cfg(feature = "gui")]
 
@@ -6,15 +6,49 @@ use datapipe::config::DatapipeConfig;
 use datapipe::datapipe_types::EncryptionKey;
 use datapipe::gui::DatapipeApp;
 use datapipe::gui::output_tab::MAX_OUTPUTS;
+use datapipe::gui::style::{M3Palette, ThemeMode, apply_theme};
 use datapipe::gui::types::{
     DecryptState, EncryptState, InputState, InputType, OutputState, OutputType, PipelineStatus,
     Tab, load_config_into_states, states_to_config,
 };
 
+fn assert_shape_text_is_ascii(shape: &egui::Shape) {
+    match shape {
+        egui::Shape::Text(text_shape) => {
+            let text = text_shape.galley.text();
+            assert!(
+                text.is_ascii(),
+                "Rendered GUI text contains non-ASCII characters that may render as missing glyph boxes: {text:?}"
+            );
+        }
+        egui::Shape::Vec(nested) => {
+            for inner in nested {
+                assert_shape_text_is_ascii(inner);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn assert_all_rendered_text_is_ascii(shapes: &[egui::epaint::ClippedShape]) {
+    for clipped in shapes {
+        assert_shape_text_is_ascii(&clipped.shape);
+    }
+}
+
+fn render_frame_and_assert_ascii(ctx: &egui::Context, app: &mut DatapipeApp) {
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.render(ui);
+    });
+    assert_all_rendered_text_is_ascii(&output.shapes);
+    output.textures_delta.clear();
+}
+
 #[test]
 fn test_gui_app_creation() {
     let app = DatapipeApp::new().expect("Failed to create DatapipeApp");
     assert_eq!(app.active_tab, Tab::Input);
+    assert_eq!(app.theme_mode, ThemeMode::Light);
     assert_eq!(app.output_states.len(), 1);
     assert_eq!(app.controller.status, PipelineStatus::Idle);
     assert!(!app.controller.is_running());
@@ -138,4 +172,79 @@ stdout_output = true
     assert!(!encrypt.enabled);
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].output_type, OutputType::Stdout);
+}
+
+#[test]
+fn test_gui_m3_theme_modes_and_headless_rendering_without_missing_glyphs() {
+    let mut app = DatapipeApp::new().expect("Failed to create DatapipeApp");
+    let ctx = egui::Context::default();
+
+    apply_theme(&ctx, ThemeMode::Light);
+    assert_eq!(
+        ctx.global_style().visuals.panel_fill,
+        M3Palette::light().surface
+    );
+
+    // Exercise full M3 UI rendering across both Light and Dark modes and all tabs/protocols,
+    // asserting every rendered text galley uses universally supported ASCII characters.
+    for mode in [ThemeMode::Light, ThemeMode::Dark] {
+        app.theme_mode = mode;
+
+        // 1. Input tab across every InputType
+        app.active_tab = Tab::Input;
+        for &it in InputType::all() {
+            app.input_state.input_type = it;
+            render_frame_and_assert_ascii(&ctx, &mut app);
+        }
+
+        // 2. Decrypt tab (disabled, invalid key, valid key)
+        app.active_tab = Tab::Decrypt;
+        for (enabled, key) in [
+            (false, String::new()),
+            (true, "short".to_string()),
+            (true, EncryptionKey::generate().to_string()),
+        ] {
+            app.decrypt_state.enabled = enabled;
+            app.decrypt_state.key = key;
+            render_frame_and_assert_ascii(&ctx, &mut app);
+        }
+
+        // 3. Encrypt tab (disabled & enabled with generated key)
+        app.active_tab = Tab::Encrypt;
+        app.encrypt_state.enabled = false;
+        render_frame_and_assert_ascii(&ctx, &mut app);
+
+        app.encrypt_state.enabled = true;
+        app.encrypt_state.generate_key();
+        render_frame_and_assert_ascii(&ctx, &mut app);
+
+        // 4. Output tab across every OutputType + multi-sink card layout
+        app.active_tab = Tab::Output;
+        app.output_states = vec![OutputState::default(), OutputState::default()];
+        for &ot in OutputType::all() {
+            app.output_states[0].output_type = ot;
+            render_frame_and_assert_ascii(&ctx, &mut app);
+        }
+
+        // 5. Run tab across all PipelineStatus states
+        app.active_tab = Tab::Run;
+        app.last_message = Some(("Configuration validated.".to_string(), false));
+        for status in [
+            PipelineStatus::Idle,
+            PipelineStatus::Ready,
+            PipelineStatus::Running,
+            PipelineStatus::Stopped,
+            PipelineStatus::Completed,
+            PipelineStatus::Error("Simulated connection failure".to_string()),
+        ] {
+            app.controller.status = status;
+            render_frame_and_assert_ascii(&ctx, &mut app);
+        }
+    }
+
+    assert!(ctx.global_style().visuals.dark_mode);
+    assert_eq!(
+        ctx.global_style().visuals.panel_fill,
+        M3Palette::dark().surface
+    );
 }

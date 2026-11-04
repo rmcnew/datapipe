@@ -1,9 +1,10 @@
-//! Run tab UI view, animated pipeline diagrams, metrics monitoring, and start/stop controls.
+//! Run tab Material Design 3 view, animated pipeline topology, telemetry tiles, and execution controls.
 
 use crate::config::DatapipeConfig;
 use crate::gui::pipeline::PipelineController;
 use crate::gui::style::{
-    BLUE_BUTTON_BG, BORDER_COLOR, PANEL_BG, blue_button, nav_arrow, start_button, stop_button,
+    M3Palette, bottom_action_bar, m3_card, m3_tonal_card, nav_back_button, outlined_button,
+    palette, section_header, start_button, status_chip_with_dot, stop_button, tonal_button,
 };
 use crate::gui::types::{
     DecryptState, EncryptState, InputState, OutputState, PipelineStatus, Tab,
@@ -11,35 +12,165 @@ use crate::gui::types::{
 };
 use crate::metrics::{format_bytes, format_duration, format_rate};
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText, Stroke, Ui, Vec2,
+    Align2, CornerRadius, FontFamily, FontId, Frame, Layout, Margin, Pos2, Rect, RichText, Stroke,
+    StrokeKind, Ui, Vec2,
 };
 
-/// Renders the Run tab.
+/// Renders the Run stage execution and monitoring tab using Material Design 3 cards and controls.
 pub fn show_run_tab(ui: &mut Ui, app: &mut crate::gui::DatapipeApp) {
-    ui.add_space(8.0);
+    let config_res = states_to_config(
+        &app.input_state,
+        &app.decrypt_state,
+        &app.encrypt_state,
+        &app.output_states,
+    );
+    let is_running = app.controller.is_running();
+    let can_start = config_res.is_ok() && !is_running;
+    let can_stop = is_running;
 
-    // Top buttons row: "Load config", "Save config", "Clear config"
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
+    let mut navigate_back = false;
+    let mut stop_clicked = false;
+    let mut start_clicked = false;
 
-        if blue_button(ui, "Load config", !app.controller.is_running()).clicked()
-            && let Some(path) = rfd::FileDialog::new()
+    bottom_action_bar(ui, "m3_run_footer", |ui| {
+        ui.horizontal(|ui| {
+            if nav_back_button(ui, "Output").clicked() {
+                navigate_back = true;
+            }
+
+            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                if start_button(ui, can_start).clicked() {
+                    start_clicked = true;
+                }
+                ui.add_space(6.0);
+                if stop_button(ui, can_stop).clicked() {
+                    stop_clicked = true;
+                }
+            });
+        });
+    });
+
+    if navigate_back {
+        app.active_tab = Tab::Output;
+    }
+    if stop_clicked {
+        app.controller.stop();
+        app.last_message = Some(("Datapipe stopped by user.".to_string(), false));
+    }
+    if start_clicked && let Ok(cfg) = config_res {
+        let rt_handle = app.runtime.handle().clone();
+        app.controller.start(&rt_handle, cfg);
+        app.last_message = Some(("Datapipe started.".to_string(), false));
+    }
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            Frame::NONE
+                .inner_margin(Margin::symmetric(24, 18))
+                .show(ui, |ui| {
+                    // Header + Configuration File Actions
+                    ui.horizontal_wrapped(|ui| {
+                        ui.vertical(|ui| {
+                            section_header(
+                                ui,
+                                "Pipeline Execution",
+                                "Manage TOML profiles, verify topology, and monitor live stream throughput.",
+                            );
+                        });
+
+                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            let editable = !app.controller.is_running();
+
+                            if outlined_button(ui, "Clear", editable).clicked() {
+                                app.input_state = InputState::default();
+                                app.decrypt_state = DecryptState::default();
+                                app.encrypt_state = EncryptState::default();
+                                app.output_states.clear();
+                                app.output_states.push(OutputState::default());
+                                app.controller.reset_metrics();
+                                app.last_message =
+                                    Some(("Configuration cleared.".to_string(), false));
+                            }
+
+                            if tonal_button(ui, "Save TOML", editable).clicked() {
+                                handle_save_config(app);
+                            }
+
+                            if tonal_button(ui, "Load TOML", editable).clicked() {
+                                handle_load_config(app);
+                            }
+                        });
+                    });
+
+                    ui.add_space(14.0);
+
+                    render_status_and_metrics(
+                        ui,
+                        &app.input_state,
+                        &app.decrypt_state,
+                        &app.encrypt_state,
+                        &app.output_states,
+                        &mut app.controller,
+                        &app.last_message,
+                    );
+                });
+        });
+}
+
+fn handle_load_config(app: &mut crate::gui::DatapipeApp) {
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter("TOML configuration", &["toml"])
+        .pick_file()
+    {
+        match DatapipeConfig::load_from_file(&path) {
+            Ok(loaded_cfg) => match loaded_cfg.validate() {
+                Ok(()) => {
+                    load_config_into_states(
+                        &loaded_cfg,
+                        &mut app.input_state,
+                        &mut app.decrypt_state,
+                        &mut app.encrypt_state,
+                        &mut app.output_states,
+                    );
+                    app.last_message = Some((
+                        format!(
+                            "Configuration loaded successfully from {:?}",
+                            path.file_name().unwrap_or_default()
+                        ),
+                        false,
+                    ));
+                }
+                Err(err) => {
+                    app.last_message =
+                        Some((format!("Configuration file validation failed: {err}"), true));
+                }
+            },
+            Err(err) => {
+                app.last_message = Some((format!("Error loading configuration file: {err}"), true));
+            }
+        }
+    }
+}
+
+fn handle_save_config(app: &mut crate::gui::DatapipeApp) {
+    match states_to_config(
+        &app.input_state,
+        &app.decrypt_state,
+        &app.encrypt_state,
+        &app.output_states,
+    ) {
+        Ok(cfg) => {
+            if let Some(path) = rfd::FileDialog::new()
                 .add_filter("TOML configuration", &["toml"])
-                .pick_file()
-        {
-            match DatapipeConfig::load_from_file(&path) {
-                Ok(loaded_cfg) => match loaded_cfg.validate() {
+                .set_file_name("datapipe.toml")
+                .save_file()
+            {
+                match cfg.save_to_file(&path) {
                     Ok(()) => {
-                        load_config_into_states(
-                            &loaded_cfg,
-                            &mut app.input_state,
-                            &mut app.decrypt_state,
-                            &mut app.encrypt_state,
-                            &mut app.output_states,
-                        );
                         app.last_message = Some((
                             format!(
-                                "Configuration loaded successfully from {:?}",
+                                "Configuration saved to {:?}",
                                 path.file_name().unwrap_or_default()
                             ),
                             false,
@@ -47,139 +178,18 @@ pub fn show_run_tab(ui: &mut Ui, app: &mut crate::gui::DatapipeApp) {
                     }
                     Err(err) => {
                         app.last_message =
-                            Some((format!("Configuration file validation failed: {err}"), true));
-                    }
-                },
-                Err(err) => {
-                    app.last_message =
-                        Some((format!("Error loading configuration file: {err}"), true));
-                }
-            }
-        }
-
-        ui.add_space(12.0);
-
-        if blue_button(ui, "Save config", !app.controller.is_running()).clicked() {
-            match states_to_config(
-                &app.input_state,
-                &app.decrypt_state,
-                &app.encrypt_state,
-                &app.output_states,
-            ) {
-                Ok(cfg) => {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("TOML configuration", &["toml"])
-                        .set_file_name("datapipe.toml")
-                        .save_file()
-                    {
-                        match cfg.save_to_file(&path) {
-                            Ok(()) => {
-                                app.last_message = Some((
-                                    format!(
-                                        "Configuration saved to {:?}",
-                                        path.file_name().unwrap_or_default()
-                                    ),
-                                    false,
-                                ));
-                            }
-                            Err(err) => {
-                                app.last_message =
-                                    Some((format!("Failed to save configuration: {err}"), true));
-                            }
-                        }
+                            Some((format!("Failed to save configuration: {err}"), true));
                     }
                 }
-                Err(errs) => {
-                    app.last_message = Some((
-                        format!("Cannot save invalid configuration: {}", errs.join("; ")),
-                        true,
-                    ));
-                }
             }
         }
-
-        ui.add_space(12.0);
-
-        if blue_button(ui, "Clear config", !app.controller.is_running()).clicked() {
-            app.input_state = InputState::default();
-            app.decrypt_state = DecryptState::default();
-            app.encrypt_state = EncryptState::default();
-            app.output_states.clear();
-            app.output_states.push(OutputState::default());
-            app.controller.reset_metrics();
-            app.last_message = Some(("Configuration cleared.".to_string(), false));
+        Err(errs) => {
+            app.last_message = Some((
+                format!("Cannot save invalid configuration: {}", errs.join("; ")),
+                true,
+            ));
         }
-    });
-
-    ui.add_space(10.0);
-
-    // Center status container (light gray box)
-    let panel_frame = Frame::canvas(ui.style())
-        .fill(PANEL_BG)
-        .stroke(Stroke::new(1.0, BORDER_COLOR))
-        .corner_radius(CornerRadius::same(3))
-        .inner_margin(Margin::same(12));
-
-    let available_panel_height = ui.available_height() - 56.0;
-
-    panel_frame.show(ui, |ui| {
-        ui.set_min_size(Vec2::new(ui.available_width(), available_panel_height));
-        render_status_and_metrics(
-            ui,
-            &app.input_state,
-            &app.decrypt_state,
-            &app.encrypt_state,
-            &app.output_states,
-            &mut app.controller,
-            &app.last_message,
-        );
-    });
-
-    // Check if configuration is currently valid for starting
-    let config_res = states_to_config(
-        &app.input_state,
-        &app.decrypt_state,
-        &app.encrypt_state,
-        &app.output_states,
-    );
-    let can_start = config_res.is_ok() && !app.controller.is_running();
-    let can_stop = app.controller.is_running();
-
-    // Bottom navigation and control buttons
-    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-
-            // Left arrow to Output tab
-            if nav_arrow(ui, "⬅").clicked() {
-                app.active_tab = Tab::Output;
-            }
-
-            // Stop Datapipe button in center
-            let center_offset = (ui.available_width() / 2.0) - 160.0;
-            if center_offset > 0.0 {
-                ui.add_space(center_offset);
-            }
-
-            if stop_button(ui, can_stop).clicked() {
-                app.controller.stop();
-                app.last_message = Some(("Datapipe stopped by user.".to_string(), false));
-            }
-
-            // Start Datapipe button on bottom right
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(8.0);
-                if start_button(ui, can_start).clicked()
-                    && let Ok(cfg) = config_res
-                {
-                    let rt_handle = app.runtime.handle().clone();
-                    app.controller.start(&rt_handle, cfg);
-                    app.last_message = Some(("Datapipe started.".to_string(), false));
-                }
-            });
-        });
-    });
+    }
 }
 
 fn render_status_and_metrics(
@@ -191,246 +201,346 @@ fn render_status_and_metrics(
     controller: &mut PipelineController,
     last_message: &Option<(String, bool)>,
 ) {
-    // 1. Status header and badge
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Status:").size(16.0).strong());
+    let p = palette(ui);
 
-        let (status_text, status_color) = match &controller.status {
-            PipelineStatus::Idle => ("IDLE", Color32::from_rgb(80, 80, 80)),
-            PipelineStatus::Ready => ("READY", Color32::from_rgb(0, 120, 40)),
-            PipelineStatus::Running => ("RUNNING", Color32::from_rgb(0, 160, 50)),
-            PipelineStatus::Stopped => ("STOPPED", Color32::from_rgb(200, 120, 0)),
-            PipelineStatus::Completed => ("COMPLETED", Color32::from_rgb(0, 100, 180)),
-            PipelineStatus::Error(_) => ("ERROR", Color32::from_rgb(210, 20, 20)),
-        };
-
-        let badge = RichText::new(format!(" {status_text} "))
-            .size(15.0)
-            .strong()
-            .color(Color32::WHITE);
-
-        let badge_bg = status_color;
-        egui::Frame::canvas(ui.style())
-            .fill(badge_bg)
-            .corner_radius(CornerRadius::same(3))
-            .inner_margin(Margin::symmetric(6, 2))
-            .show(ui, |ui| {
-                ui.label(badge);
-            });
-
-        if let PipelineStatus::Error(ref err) = controller.status {
-            ui.label(RichText::new(err).color(Color32::from_rgb(200, 20, 20)));
-        }
-    });
-
+    // 1. Optional feedback banner
     if let Some((msg, is_err)) = last_message {
-        ui.add_space(4.0);
-        let color = if *is_err {
-            Color32::from_rgb(180, 30, 30)
+        let (bg, fg, border) = if *is_err {
+            (p.error_container, p.on_error_container, p.error)
         } else {
-            Color32::from_rgb(30, 120, 30)
+            (
+                p.secondary_container,
+                p.on_secondary_container,
+                p.outline_variant,
+            )
         };
-        ui.label(RichText::new(msg).size(13.0).color(color));
+        Frame::NONE
+            .fill(bg)
+            .stroke(Stroke::new(1.0, border))
+            .corner_radius(CornerRadius::same(10))
+            .inner_margin(Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(msg).size(13.0).strong().color(fg));
+            });
+        ui.add_space(12.0);
     }
 
-    ui.add_space(8.0);
-
-    // 2. Validation errors display if not running
+    // 2. Validation alert card when configuration is incomplete
     if !controller.is_running()
         && let Err(errs) = states_to_config(input, decrypt, encrypt, outputs)
     {
-        Frame::canvas(ui.style())
-            .fill(Color32::from_rgb(255, 235, 235))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(220, 100, 100)))
-            .corner_radius(CornerRadius::same(3))
-            .inner_margin(Margin::same(8))
+        Frame::NONE
+            .fill(p.error_container)
+            .stroke(Stroke::new(1.0, p.error))
+            .corner_radius(CornerRadius::same(12))
+            .inner_margin(Margin::same(14))
             .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 ui.label(
-                    RichText::new("Missing or invalid required parameters:")
+                    RichText::new("Configuration Incomplete")
+                        .size(14.0)
                         .strong()
-                        .color(Color32::from_rgb(180, 20, 20)),
+                        .color(p.on_error_container),
                 );
+                ui.add_space(4.0);
                 for err in errs {
-                    ui.label(
-                        RichText::new(format!("• {err}"))
-                            .color(Color32::from_rgb(180, 20, 20))
-                            .size(12.0),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let (dot_rect, _) =
+                            ui.allocate_exact_size(Vec2::new(6.0, 14.0), egui::Sense::hover());
+                        ui.painter()
+                            .circle_filled(dot_rect.center(), 2.5, p.on_error_container);
+                        ui.label(RichText::new(err).size(12.5).color(p.on_error_container));
+                    });
                 }
             });
+        ui.add_space(12.0);
     }
 
-    // 3. Animated Pipeline Diagram
-    render_animated_diagram(
-        ui,
-        input,
-        decrypt,
-        encrypt,
-        outputs,
-        controller.is_running(),
-    );
-
-    ui.add_space(10.0);
-
-    // 4. Live metrics and data transfer statistics
-    ui.group(|ui| {
+    // 3. M3 Pipeline Topology & Status Card
+    m3_card(ui).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.heading("Data Transfer Metrics");
-        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Pipeline Topology")
+                    .size(15.0)
+                    .strong()
+                    .color(p.on_surface),
+            );
+
+            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                let (label, chip_bg, chip_fg, show_dot) = match &controller.status {
+                    PipelineStatus::Idle => (
+                        "IDLE",
+                        p.surface_container_highest,
+                        p.on_surface_variant,
+                        false,
+                    ),
+                    PipelineStatus::Ready => (
+                        "READY",
+                        p.secondary_container,
+                        p.on_secondary_container,
+                        false,
+                    ),
+                    PipelineStatus::Running => (
+                        "RUNNING",
+                        p.tertiary_container,
+                        p.on_tertiary_container,
+                        true,
+                    ),
+                    PipelineStatus::Stopped => (
+                        "STOPPED",
+                        p.warning_container,
+                        p.on_warning_container,
+                        false,
+                    ),
+                    PipelineStatus::Completed => (
+                        "COMPLETED",
+                        p.primary_container,
+                        p.on_primary_container,
+                        false,
+                    ),
+                    PipelineStatus::Error(_) => {
+                        ("ERROR", p.error_container, p.on_error_container, false)
+                    }
+                };
+                status_chip_with_dot(ui, label, chip_bg, chip_fg, show_dot);
+            });
+        });
+
+        if let PipelineStatus::Error(ref err) = controller.status {
+            ui.add_space(6.0);
+            ui.label(RichText::new(err).size(12.5).color(p.error));
+        }
+
+        ui.add_space(10.0);
+
+        render_animated_diagram(
+            ui,
+            &p,
+            input,
+            decrypt,
+            encrypt,
+            outputs,
+            controller.is_running(),
+        );
+    });
+
+    ui.add_space(12.0);
+
+    // 4. M3 Live Telemetry Metric Tiles Card
+    m3_card(ui).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(
+            RichText::new("Data Transfer Telemetry")
+                .size(15.0)
+                .strong()
+                .color(p.on_surface),
+        );
+        ui.add_space(10.0);
 
         let m = controller.metrics_snapshot();
-        egui::Grid::new("metrics_display_grid")
-            .num_columns(4)
-            .spacing([24.0, 6.0])
-            .show(ui, |ui| {
-                ui.label(RichText::new("Elapsed Time:").strong());
-                ui.label(
-                    RichText::new(format_duration(m.elapsed))
-                        .size(15.0)
-                        .strong()
-                        .color(Color32::from_rgb(20, 80, 160)),
-                );
 
-                ui.label("");
-                ui.label("");
-                ui.end_row();
+        ui.columns(3, |cols| {
+            render_metric_tile(
+                &mut cols[0],
+                "ELAPSED TIME",
+                &format_duration(m.elapsed),
+                p.primary,
+            );
+            render_metric_tile(
+                &mut cols[1],
+                "BYTES READ",
+                &format_bytes(m.read_bytes),
+                p.on_surface,
+            );
+            render_metric_tile(
+                &mut cols[2],
+                "BYTES WRITTEN",
+                &format_bytes(m.written_bytes),
+                p.on_surface,
+            );
+        });
 
-                ui.label(RichText::new("Bytes Read:").strong());
-                ui.label(RichText::new(format_bytes(m.read_bytes)).size(14.0));
+        ui.add_space(8.0);
 
-                ui.label(RichText::new("Read Rate:").strong());
-                ui.label(RichText::new(format_rate(m.read_rate)).size(14.0));
-                ui.end_row();
+        let rate_color = if controller.is_running() {
+            p.tertiary
+        } else {
+            p.on_surface
+        };
 
-                ui.label(RichText::new("Bytes Written:").strong());
-                ui.label(RichText::new(format_bytes(m.written_bytes)).size(14.0));
+        ui.columns(2, |cols| {
+            render_metric_tile(
+                &mut cols[0],
+                "READ THROUGHPUT",
+                &format_rate(m.read_rate),
+                rate_color,
+            );
+            render_metric_tile(
+                &mut cols[1],
+                "WRITE THROUGHPUT",
+                &format_rate(m.write_rate),
+                rate_color,
+            );
+        });
+    });
+}
 
-                ui.label(RichText::new("Write Rate:").strong());
-                ui.label(RichText::new(format_rate(m.write_rate)).size(14.0));
-                ui.end_row();
-            });
+fn render_metric_tile(ui: &mut Ui, label: &str, value: &str, value_color: egui::Color32) {
+    let p = palette(ui);
+    m3_tonal_card(ui).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 4.0;
+        ui.label(
+            RichText::new(label)
+                .size(11.0)
+                .strong()
+                .color(p.on_surface_variant),
+        );
+        ui.label(RichText::new(value).size(17.0).strong().color(value_color));
     });
 }
 
 fn render_animated_diagram(
     ui: &mut Ui,
+    p: &M3Palette,
     input: &InputState,
     decrypt: &DecryptState,
     encrypt: &EncryptState,
     outputs: &[OutputState],
     is_running: bool,
 ) {
-    let diagram_size = Vec2::new(ui.available_width(), 80.0);
+    let diagram_size = Vec2::new(ui.available_width(), 88.0);
     let (rect, _) = ui.allocate_exact_size(diagram_size, egui::Sense::hover());
     let painter = ui.painter();
 
-    // Draw background for diagram
-    painter.rect_filled(
-        rect,
-        CornerRadius::same(3),
-        Color32::from_rgb(215, 215, 215),
-    );
+    painter.rect_filled(rect, CornerRadius::same(12), p.surface_container);
     painter.rect_stroke(
         rect,
-        CornerRadius::same(3),
-        Stroke::new(1.0, Color32::from_rgb(180, 180, 180)),
-        egui::StrokeKind::Inside,
+        CornerRadius::same(12),
+        Stroke::new(1.0, p.outline_variant),
+        StrokeKind::Inside,
     );
 
-    // Collect stages to render: Input -> [Decrypt] -> [Encrypt] -> Outputs
-    let mut stages = Vec::new();
-    stages.push(format!("Input\n({})", input.input_type.name()));
+    // Collect active stages: Input -> [Decrypt] -> [Encrypt] -> Outputs
+    let mut stages: Vec<(String, String)> = Vec::with_capacity(4);
+    stages.push(("Input".to_string(), input.input_type.name().to_string()));
 
     if decrypt.enabled {
-        stages.push("Decrypt\n(ChaCha20)".to_string());
+        stages.push(("Decrypt".to_string(), "ChaCha20-P1305".to_string()));
     }
 
     if encrypt.enabled {
-        stages.push("Encrypt\n(ChaCha20)".to_string());
+        stages.push(("Encrypt".to_string(), "ChaCha20-P1305".to_string()));
     }
 
     let out_count = outputs.len();
     if out_count == 1 {
-        stages.push(format!("Output\n({})", outputs[0].output_type.name()));
+        stages.push((
+            "Output".to_string(),
+            outputs[0].output_type.name().to_string(),
+        ));
     } else {
-        stages.push(format!("Outputs\n({out_count} sinks)"));
+        stages.push(("Outputs".to_string(), format!("{out_count} Sinks")));
     }
 
     let num_stages = stages.len();
-    let node_width = 110.0;
-    let node_height = 44.0;
     let total_width = rect.width();
-    let spacing = (total_width - (node_width * num_stages as f32)) / (num_stages as f32 + 1.0);
+    let max_node_w =
+        ((total_width - (num_stages as f32 + 1.0) * 18.0) / num_stages as f32).clamp(92.0, 142.0);
+    let node_width = max_node_w;
+    let node_height = 52.0;
+    let spacing =
+        ((total_width - (node_width * num_stages as f32)) / (num_stages as f32 + 1.0)).max(8.0);
 
     let y_center = rect.center().y;
-
     let time = ui.input(|i| i.time);
     if is_running {
         ui.ctx().request_repaint();
     }
 
-    let mut centers = Vec::new();
+    let mut centers = Vec::with_capacity(num_stages);
 
-    for (i, stage_label) in stages.iter().enumerate() {
+    for (i, (title, subtitle)) in stages.iter().enumerate() {
         let x = rect.min.x + spacing + (i as f32 * (node_width + spacing));
         let node_rect = Rect::from_min_size(
-            Pos2::new(x, y_center - (node_height / 2.0)),
+            Pos2::new(x, y_center - (node_height * 0.5)),
             Vec2::new(node_width, node_height),
         );
         centers.push(node_rect.center());
 
-        // Node fill and outline
-        let fill = if is_running {
-            Color32::from_rgb(240, 248, 255)
+        let (fill, border, title_fg, sub_fg) = if is_running {
+            (
+                p.primary_container,
+                Stroke::new(1.5, p.primary),
+                p.on_primary_container,
+                p.on_primary_container,
+            )
         } else {
-            Color32::from_rgb(245, 245, 245)
+            (
+                p.surface_container_lowest,
+                Stroke::new(1.0, p.outline),
+                p.on_surface,
+                p.on_surface_variant,
+            )
         };
 
-        painter.rect_filled(node_rect, CornerRadius::same(4), fill);
+        painter.rect_filled(node_rect, CornerRadius::same(10), fill);
         painter.rect_stroke(
             node_rect,
-            CornerRadius::same(4),
-            Stroke::new(1.5, BLUE_BUTTON_BG),
-            egui::StrokeKind::Inside,
+            CornerRadius::same(10),
+            border,
+            StrokeKind::Inside,
         );
 
         painter.text(
-            node_rect.center(),
+            Pos2::new(node_rect.center().x, node_rect.center().y - 7.5),
             Align2::CENTER_CENTER,
-            stage_label,
-            FontId::proportional(11.0),
-            Color32::from_rgb(20, 20, 20),
+            title,
+            FontId::new(13.0, FontFamily::Proportional),
+            title_fg,
+        );
+        painter.text(
+            Pos2::new(node_rect.center().x, node_rect.center().y + 9.0),
+            Align2::CENTER_CENTER,
+            subtitle,
+            FontId::new(11.0, FontFamily::Proportional),
+            sub_fg,
         );
     }
 
-    // Draw connecting arrows and animated particles between centers
-    for i in 0..centers.len() - 1 {
-        let start = Pos2::new(centers[i].x + (node_width / 2.0), y_center);
-        let end = Pos2::new(centers[i + 1].x - (node_width / 2.0), y_center);
+    let connector_color = if is_running { p.primary } else { p.outline };
 
-        // Arrow base line
-        painter.line_segment(
-            [start, end],
-            Stroke::new(2.0, Color32::from_rgb(140, 140, 140)),
-        );
+    for i in 0..centers.len().saturating_sub(1) {
+        let start = Pos2::new(centers[i].x + (node_width * 0.5) + 2.0, y_center);
+        let end = Pos2::new(centers[i + 1].x - (node_width * 0.5) - 2.0, y_center);
+        if end.x <= start.x {
+            continue;
+        }
 
-        // Arrow tip
+        painter.line_segment([start, end], Stroke::new(2.0, connector_color));
+
         let tip_size = 5.0;
         painter.line_segment(
             [end, Pos2::new(end.x - tip_size, end.y - tip_size)],
-            Stroke::new(2.0, Color32::from_rgb(140, 140, 140)),
+            Stroke::new(2.0, connector_color),
         );
         painter.line_segment(
             [end, Pos2::new(end.x - tip_size, end.y + tip_size)],
-            Stroke::new(2.0, Color32::from_rgb(140, 140, 140)),
+            Stroke::new(2.0, connector_color),
         );
 
-        // Animated particles when running
         if is_running {
-            let cycle = (time * 1.5 + (i as f64 * 0.3)) % 1.0;
-            let particle_x = start.x + ((end.x - start.x) * cycle as f32);
-            let particle_pos = Pos2::new(particle_x, y_center);
-            painter.circle_filled(particle_pos, 4.0, Color32::from_rgb(0, 180, 60));
+            for offset in [0.0_f64, 0.5_f64] {
+                let cycle = (time * 1.4 + (i as f64 * 0.25) + offset) % 1.0;
+                let particle_x = start.x + ((end.x - start.x) * cycle as f32);
+                let particle_pos = Pos2::new(particle_x, y_center);
+                painter.circle_filled(particle_pos, 6.5, p.tertiary.gamma_multiply(0.28));
+                painter.circle_filled(particle_pos, 3.8, p.tertiary);
+            }
         }
     }
 }

@@ -1,12 +1,10 @@
 name: Build and Test
 
 on:
-  push:
-    branches:
-      - develop
   pull_request:
     branches:
       - main
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
