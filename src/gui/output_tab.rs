@@ -1,75 +1,133 @@
-//! Output tab UI view, dynamic multi-output list (1 to 64 outputs), and form fields.
+//! Output tab Material Design 3 view, dynamic multi-output fan-out cards (1 to 64 sinks), and form fields.
 
-use crate::gui::style::{PANEL_BG, minus_button, nav_arrow, plus_button};
+use crate::gui::style::{
+    bottom_action_bar, compact_tonal_button, danger_outlined_button, m3_card, m3_tonal_card,
+    nav_back_button, nav_next_button, palette, plus_button, section_header, status_chip,
+};
 use crate::gui::types::{OutputState, OutputType, Tab};
-use egui::{CornerRadius, Frame, Margin, Stroke, Ui};
+use egui::{Frame, Layout, Margin, RichText, Ui};
 
-/// Maximum number of output destinations supported.
+/// Maximum number of concurrent output destinations supported.
 pub const MAX_OUTPUTS: usize = 64;
 
-/// Renders the Output tab.
+/// Renders the Output stage configuration tab using Material Design 3 cards and controls.
 pub fn show_output_tab(ui: &mut Ui, outputs: &mut Vec<OutputState>, active_tab: &mut Tab) {
     if outputs.is_empty() {
         outputs.push(OutputState::default());
     }
 
+    let can_add = outputs.len() < MAX_OUTPUTS;
+    let mut add_requested = false;
+
+    bottom_action_bar(ui, "m3_output_footer", |ui| {
+        ui.horizontal(|ui| {
+            if nav_back_button(ui, "Encrypt").clicked() {
+                *active_tab = Tab::Encrypt;
+            }
+
+            ui.add_space(8.0);
+
+            if plus_button(ui, can_add).clicked() {
+                add_requested = true;
+            }
+
+            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                if nav_next_button(ui, "Next: Run").clicked() {
+                    *active_tab = Tab::Run;
+                }
+            });
+        });
+    });
+
+    if add_requested && outputs.len() < MAX_OUTPUTS {
+        outputs.push(OutputState::default());
+    }
+
     let mut remove_index: Option<usize> = None;
 
-    // Use a vertical layout with top scroll area and bottom fixed control bar
-    let available_height = ui.available_height() - 56.0;
-
     egui::ScrollArea::vertical()
-        .max_height(available_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let total_outputs = outputs.len();
-            for (index, state) in outputs.iter_mut().enumerate() {
-                ui.add_space(8.0);
+            Frame::NONE
+                .inner_margin(Margin::symmetric(24, 18))
+                .show(ui, |ui| {
+                    let p = palette(ui);
 
-                // Selector row matching mockup
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("Output #{}:", index + 1))
-                            .strong()
-                            .size(14.0),
-                    );
-                    egui::ComboBox::from_id_salt(format!("output_type_combo_{index}"))
-                        .width(200.0)
-                        .selected_text(egui::RichText::new(state.output_type.name()).strong())
-                        .show_ui(ui, |ui| {
-                            for ot in OutputType::all() {
-                                ui.selectable_value(&mut state.output_type, *ot, ot.name());
-                            }
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            section_header(
+                                ui,
+                                "Output Destinations",
+                                "Configure up to 64 concurrent output sinks for fan-out data streaming.",
+                            );
                         });
 
-                    // For outputs after the first output, '-' button is directly to the right
-                    if index > 0 {
-                        ui.add_space(8.0);
-                        if minus_button(ui).clicked() {
-                            remove_index = Some(index);
+                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            status_chip(
+                                ui,
+                                &format!("{} / {MAX_OUTPUTS} SINKS", outputs.len()),
+                                p.secondary_container,
+                                p.on_secondary_container,
+                            );
+                        });
+                    });
+
+                    ui.add_space(14.0);
+
+                    for (index, state) in outputs.iter_mut().enumerate() {
+                        if index > 0 {
+                            ui.add_space(12.0);
                         }
+
+                        m3_card(ui).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+
+                            // Card header row
+                            ui.horizontal(|ui| {
+                                status_chip(
+                                    ui,
+                                    &format!("SINK #{}", index + 1),
+                                    p.primary_container,
+                                    p.on_primary_container,
+                                );
+
+                                ui.add_space(4.0);
+
+                                egui::ComboBox::from_id_salt(format!("output_type_combo_{index}"))
+                                    .width(200.0)
+                                    .selected_text(
+                                        RichText::new(state.output_type.name())
+                                            .size(14.0)
+                                            .strong()
+                                            .color(p.on_surface),
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        for ot in OutputType::all() {
+                                            ui.selectable_value(
+                                                &mut state.output_type,
+                                                *ot,
+                                                ot.name(),
+                                            );
+                                        }
+                                    });
+
+                                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if index > 0
+                                        && danger_outlined_button(ui, "Remove", true).clicked()
+                                    {
+                                        remove_index = Some(index);
+                                    }
+                                });
+                            });
+
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.add_space(10.0);
+
+                            render_single_output_fields(ui, state, index);
+                        });
                     }
                 });
-
-                ui.add_space(6.0);
-
-                // Form fields container (light gray box)
-                let panel_frame = Frame::canvas(ui.style())
-                    .fill(PANEL_BG)
-                    .stroke(Stroke::new(1.0, crate::gui::style::BORDER_COLOR))
-                    .corner_radius(CornerRadius::same(3))
-                    .inner_margin(Margin::same(10));
-
-                panel_frame.show(ui, |ui| {
-                    render_single_output_fields(ui, state, index);
-                });
-
-                // Horizontal rule between output sections
-                if index < total_outputs - 1 {
-                    ui.add_space(10.0);
-                    ui.separator();
-                }
-            }
         });
 
     if let Some(idx) = remove_index
@@ -77,100 +135,124 @@ pub fn show_output_tab(ui: &mut Ui, outputs: &mut Vec<OutputState>, active_tab: 
     {
         outputs.remove(idx);
     }
+}
 
-    // Bottom navigation and control buttons
-    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
+fn field_label(ui: &mut Ui, label: &str) {
+    let p = palette(ui);
+    ui.label(
+        RichText::new(label)
+            .size(13.5)
+            .strong()
+            .color(p.on_surface_variant),
+    );
+}
 
-            // Left arrow to Encrypt
-            if nav_arrow(ui, "⬅").clicked() {
-                *active_tab = Tab::Encrypt;
+fn pick_file_row(ui: &mut Ui, value: &mut String, hint: &str, save_dialog: bool) {
+    ui.horizontal(|ui| {
+        let text_width = (ui.available_width() - 96.0).max(120.0);
+        ui.add(
+            egui::TextEdit::singleline(value)
+                .hint_text(hint)
+                .desired_width(text_width),
+        );
+        if compact_tonal_button(ui, "Browse...", true).clicked() {
+            let selected = if save_dialog {
+                rfd::FileDialog::new().save_file()
+            } else {
+                rfd::FileDialog::new().pick_file()
+            };
+            if let Some(path) = selected {
+                *value = path.display().to_string();
             }
+        }
+    });
+}
 
-            // Bottom center '+' button (disabled at 64 outputs)
-            let center_offset = (ui.available_width() / 2.0) - 60.0;
-            if center_offset > 0.0 {
-                ui.add_space(center_offset);
-            }
-
-            let can_add = outputs.len() < MAX_OUTPUTS;
-            if plus_button(ui, can_add).clicked() {
-                outputs.push(OutputState::default());
-            }
-
-            // Bottom right arrow to Run
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(8.0);
-                if nav_arrow(ui, "➡").clicked() {
-                    *active_tab = Tab::Run;
-                }
-            });
-        });
+fn insecure_checkbox(ui: &mut Ui, checked: &mut bool, label: &str) {
+    let p = palette(ui);
+    ui.horizontal(|ui| {
+        ui.checkbox(checked, label);
+        if *checked {
+            status_chip(ui, "INSECURE", p.warning_container, p.on_warning_container);
+        }
     });
 }
 
 fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usize) {
+    let p = palette(ui);
+
+    if state.output_type == OutputType::Stdout {
+        m3_tonal_card(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                RichText::new("Standard Output (STDOUT)")
+                    .size(14.0)
+                    .strong()
+                    .color(p.on_surface),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "Writes outbound bytes directly to the process standard output stream.",
+                )
+                .size(13.0)
+                .color(p.on_surface_variant),
+            );
+        });
+        return;
+    }
+
     egui::Grid::new(format!("output_grid_{index}"))
         .num_columns(2)
-        .spacing([12.0, 6.0])
+        .spacing([16.0, 10.0])
         .show(ui, |ui| match state.output_type {
             OutputType::File => {
-                ui.label("File Path:");
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [ui.available_width() - 90.0, 24.0],
-                        egui::TextEdit::singleline(&mut state.file_path),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = rfd::FileDialog::new().save_file()
-                    {
-                        state.file_path = path.display().to_string();
-                    }
-                });
+                field_label(ui, "Output File Path");
+                pick_file_row(ui, &mut state.file_path, "/path/to/output.bin", true);
                 ui.end_row();
             }
-            OutputType::Stdout => {
-                ui.label("Standard Output:");
-                ui.label("Streams raw output directly to process standard output (STDOUT).");
-                ui.end_row();
-            }
+            OutputType::Stdout => {}
             OutputType::Tcp => {
-                ui.label("Remote TCP Address:");
-                ui.add_sized(
-                    [240.0, 24.0],
-                    egui::TextEdit::singleline(&mut state.tcp_address),
+                field_label(ui, "Remote TCP Address");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.tcp_address)
+                        .hint_text("127.0.0.1:9001")
+                        .desired_width(260.0),
                 );
                 ui.end_row();
             }
             OutputType::Udp => {
-                ui.label("Remote UDP Address:");
-                ui.add_sized(
-                    [240.0, 24.0],
-                    egui::TextEdit::singleline(&mut state.udp_address),
+                field_label(ui, "Remote UDP Address");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.udp_address)
+                        .hint_text("127.0.0.1:9101")
+                        .desired_width(260.0),
                 );
                 ui.end_row();
             }
             OutputType::Http => {
-                ui.label("HTTP URL:");
-                ui.add_sized(
-                    [ui.available_width(), 24.0],
-                    egui::TextEdit::singleline(&mut state.http_url),
-                );
-                ui.end_row();
-                ui.label("Send Rate (ms):");
-                ui.add_sized(
-                    [120.0, 24.0],
-                    egui::TextEdit::singleline(&mut state.http_rate),
+                field_label(ui, "HTTP Endpoint URL");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.http_url)
+                        .hint_text("http://example.com:8080/ingest")
+                        .desired_width(ui.available_width()),
                 );
                 ui.end_row();
 
-                ui.label("Delimiter:");
+                field_label(ui, "Send Interval (ms)");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.http_rate)
+                        .hint_text("1000")
+                        .desired_width(140.0),
+                );
+                ui.end_row();
+
+                field_label(ui, "Record Delimiter");
                 ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [80.0, 24.0],
-                        egui::TextEdit::singleline(&mut state.http_delimiter),
+                    ui.add(
+                        egui::TextEdit::singleline(&mut state.http_delimiter)
+                            .hint_text("\\n")
+                            .desired_width(96.0),
                     );
                     ui.checkbox(
                         &mut state.http_include_delimiter,
@@ -180,25 +262,28 @@ fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usiz
                 ui.end_row();
             }
             OutputType::Https => {
-                ui.label("HTTPS URL:");
-                ui.add_sized(
-                    [ui.available_width(), 24.0],
-                    egui::TextEdit::singleline(&mut state.https_url),
+                field_label(ui, "HTTPS Endpoint URL");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.https_url)
+                        .hint_text("https://example.com:8443/ingest")
+                        .desired_width(ui.available_width()),
                 );
                 ui.end_row();
 
-                ui.label("Send Rate (ms):");
-                ui.add_sized(
-                    [120.0, 24.0],
-                    egui::TextEdit::singleline(&mut state.https_rate),
+                field_label(ui, "Send Interval (ms)");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.https_rate)
+                        .hint_text("1000")
+                        .desired_width(140.0),
                 );
                 ui.end_row();
 
-                ui.label("Delimiter:");
+                field_label(ui, "Record Delimiter");
                 ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [80.0, 24.0],
-                        egui::TextEdit::singleline(&mut state.https_delimiter),
+                    ui.add(
+                        egui::TextEdit::singleline(&mut state.https_delimiter)
+                            .hint_text("\\n")
+                            .desired_width(96.0),
                     );
                     ui.checkbox(
                         &mut state.https_include_delimiter,
@@ -207,115 +292,89 @@ fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usiz
                 });
                 ui.end_row();
 
-                ui.label("Root Certificates (PEM):");
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [ui.available_width() - 90.0, 24.0],
-                        egui::TextEdit::singleline(&mut state.https_root_certificates),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_file()
-                    {
-                        state.https_root_certificates = path.display().to_string();
-                    }
-                });
+                field_label(ui, "Root Certificates (PEM)");
+                pick_file_row(
+                    ui,
+                    &mut state.https_root_certificates,
+                    "Optional custom CA bundle (.pem)",
+                    false,
+                );
                 ui.end_row();
 
-                ui.label("Cert Revocation List (PEM):");
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [ui.available_width() - 90.0, 24.0],
-                        egui::TextEdit::singleline(&mut state.https_crl),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_file()
-                    {
-                        state.https_crl = path.display().to_string();
-                    }
-                });
+                field_label(ui, "Cert Revocation List (PEM)");
+                pick_file_row(
+                    ui,
+                    &mut state.https_crl,
+                    "Optional certificate revocation list (.pem)",
+                    false,
+                );
                 ui.end_row();
 
-                ui.label("Client Identity (PEM):");
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [ui.available_width() - 90.0, 24.0],
-                        egui::TextEdit::singleline(&mut state.https_client_identity),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_file()
-                    {
-                        state.https_client_identity = path.display().to_string();
-                    }
-                });
+                field_label(ui, "Client Identity (PEM)");
+                pick_file_row(
+                    ui,
+                    &mut state.https_client_identity,
+                    "Optional mTLS client cert + key (.pem)",
+                    false,
+                );
                 ui.end_row();
 
-                ui.label("TLS Security Options:");
+                field_label(ui, "TLS Verification");
                 ui.vertical(|ui| {
-                    ui.checkbox(
+                    insecure_checkbox(
+                        ui,
                         &mut state.https_allow_invalid_hostnames,
-                        "Allow Invalid Hostnames (Insecure)",
+                        "Allow Invalid Hostnames",
                     );
-                    ui.checkbox(
+                    insecure_checkbox(
+                        ui,
                         &mut state.https_allow_invalid_certificates,
-                        "Allow Invalid Certificates (Insecure)",
+                        "Allow Invalid Certificates",
                     );
                 });
                 ui.end_row();
             }
             OutputType::Tls => {
-                ui.label("Remote TLS Address:");
-                ui.add_sized(
-                    [240.0, 24.0],
-                    egui::TextEdit::singleline(&mut state.tls_address),
+                field_label(ui, "Remote TLS Address");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.tls_address)
+                        .hint_text("127.0.0.1:9444")
+                        .desired_width(260.0),
                 );
                 ui.end_row();
 
-                ui.label("Client Cert Chain (DER):");
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [ui.available_width() - 90.0, 24.0],
-                        egui::TextEdit::singleline(&mut state.tls_cert_chain),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_file()
-                    {
-                        state.tls_cert_chain = path.display().to_string();
-                    }
-                });
+                field_label(ui, "Client Cert Chain (DER)");
+                pick_file_row(
+                    ui,
+                    &mut state.tls_cert_chain,
+                    "Client certificate (.der)",
+                    false,
+                );
                 ui.end_row();
 
-                ui.label("Client Private Key (DER):");
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [ui.available_width() - 90.0, 24.0],
-                        egui::TextEdit::singleline(&mut state.tls_client_key),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_file()
-                    {
-                        state.tls_client_key = path.display().to_string();
-                    }
-                });
+                field_label(ui, "Client Private Key (DER)");
+                pick_file_row(
+                    ui,
+                    &mut state.tls_client_key,
+                    "Client private key (.der)",
+                    false,
+                );
                 ui.end_row();
 
-                ui.label("Custom Root CA (PEM):");
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [ui.available_width() - 90.0, 24.0],
-                        egui::TextEdit::singleline(&mut state.tls_root_ca),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_file()
-                    {
-                        state.tls_root_ca = path.display().to_string();
-                    }
-                });
+                field_label(ui, "Custom Root CA (PEM)");
+                pick_file_row(
+                    ui,
+                    &mut state.tls_root_ca,
+                    "Optional root CA certificate (.pem)",
+                    false,
+                );
                 ui.end_row();
 
-                ui.label("TLS Security Options:");
-                ui.checkbox(
+                field_label(ui, "TLS Verification");
+                insecure_checkbox(
+                    ui,
                     &mut state.tls_skip_server_verify,
-                    "Skip Server Identity Verification (Insecure)",
+                    "Skip Server Identity Verification",
                 );
                 ui.end_row();
             }
