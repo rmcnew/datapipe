@@ -1,8 +1,9 @@
 //! Output tab Material Design 3 view, dynamic multi-output fan-out cards (1 to 64 sinks), and form fields.
 
 use crate::gui::style::{
-    bottom_action_bar, compact_tonal_button, danger_outlined_button, m3_card, m3_tonal_card,
-    nav_back_button, nav_next_button, palette, plus_button, section_header, status_chip,
+    bottom_action_bar, compact_tonal_button, danger_outlined_button, m3_card, m3_text_field,
+    m3_tonal_card, nav_back_button, nav_next_button, palette, plus_button, section_header,
+    status_chip,
 };
 use crate::gui::types::{OutputState, OutputType, Tab};
 use egui::{Frame, Layout, Margin, RichText, Ui};
@@ -150,11 +151,7 @@ fn field_label(ui: &mut Ui, label: &str) {
 fn pick_file_row(ui: &mut Ui, value: &mut String, hint: &str, save_dialog: bool) {
     ui.horizontal(|ui| {
         let text_width = (ui.available_width() - 96.0).max(120.0);
-        ui.add(
-            egui::TextEdit::singleline(value)
-                .hint_text(hint)
-                .desired_width(text_width),
-        );
+        m3_text_field(ui, value, hint, text_width);
         if compact_tonal_button(ui, "Browse...", true).clicked() {
             let selected = if save_dialog {
                 rfd::FileDialog::new().save_file()
@@ -214,46 +211,31 @@ fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usiz
             OutputType::Stdout => {}
             OutputType::Tcp => {
                 field_label(ui, "Remote TCP Address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.tcp_address)
-                        .hint_text("127.0.0.1:9001")
-                        .desired_width(260.0),
-                );
+                m3_text_field(ui, &mut state.tcp_address, "127.0.0.1:9001", 260.0);
                 ui.end_row();
             }
             OutputType::Udp => {
                 field_label(ui, "Remote UDP Address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.udp_address)
-                        .hint_text("127.0.0.1:9101")
-                        .desired_width(260.0),
-                );
+                m3_text_field(ui, &mut state.udp_address, "127.0.0.1:9101", 260.0);
                 ui.end_row();
             }
             OutputType::Http => {
                 field_label(ui, "HTTP Endpoint URL");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.http_url)
-                        .hint_text("http://example.com:8080/ingest")
-                        .desired_width(ui.available_width()),
+                m3_text_field(
+                    ui,
+                    &mut state.http_url,
+                    "http://example.com:8080/ingest",
+                    ui.available_width(),
                 );
                 ui.end_row();
 
                 field_label(ui, "Send Interval (ms)");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.http_rate)
-                        .hint_text("1000")
-                        .desired_width(140.0),
-                );
+                m3_text_field(ui, &mut state.http_rate, "1000", 140.0);
                 ui.end_row();
 
                 field_label(ui, "Record Delimiter");
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut state.http_delimiter)
-                            .hint_text("\\n")
-                            .desired_width(96.0),
-                    );
+                    m3_text_field(ui, &mut state.http_delimiter, "\\n", 96.0);
                     ui.checkbox(
                         &mut state.http_include_delimiter,
                         "Include Delimiter in Request",
@@ -263,28 +245,21 @@ fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usiz
             }
             OutputType::Https => {
                 field_label(ui, "HTTPS Endpoint URL");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.https_url)
-                        .hint_text("https://example.com:8443/ingest")
-                        .desired_width(ui.available_width()),
+                m3_text_field(
+                    ui,
+                    &mut state.https_url,
+                    "https://example.com:8443/ingest",
+                    ui.available_width(),
                 );
                 ui.end_row();
 
                 field_label(ui, "Send Interval (ms)");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.https_rate)
-                        .hint_text("1000")
-                        .desired_width(140.0),
-                );
+                m3_text_field(ui, &mut state.https_rate, "1000", 140.0);
                 ui.end_row();
 
                 field_label(ui, "Record Delimiter");
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut state.https_delimiter)
-                            .hint_text("\\n")
-                            .desired_width(96.0),
-                    );
+                    m3_text_field(ui, &mut state.https_delimiter, "\\n", 96.0);
                     ui.checkbox(
                         &mut state.https_include_delimiter,
                         "Include Delimiter in Request",
@@ -336,11 +311,7 @@ fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usiz
             }
             OutputType::Tls => {
                 field_label(ui, "Remote TLS Address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.tls_address)
-                        .hint_text("127.0.0.1:9444")
-                        .desired_width(260.0),
-                );
+                m3_text_field(ui, &mut state.tls_address, "127.0.0.1:9444", 260.0);
                 ui.end_row();
 
                 field_label(ui, "Client Cert Chain (DER)");

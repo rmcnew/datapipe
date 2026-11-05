@@ -1,11 +1,11 @@
 //! Decrypt tab Material Design 3 view and ChaCha20-Poly1305 key configuration.
 
 use crate::gui::style::{
-    bottom_action_bar, m3_card, m3_switch, nav_back_button, nav_next_button, palette,
-    section_header, status_chip,
+    bottom_action_bar, m3_card, m3_monospace_field, m3_switch, nav_back_button, nav_next_button,
+    palette, section_header, status_chip,
 };
 use crate::gui::types::{DecryptState, Tab};
-use egui::{CornerRadius, Frame, Layout, Margin, ProgressBar, RichText, TextStyle, Ui};
+use egui::{CornerRadius, Frame, Layout, Margin, ProgressBar, RichText, Ui};
 
 /// Renders the Decrypt stage configuration tab using Material Design 3 cards and controls.
 pub fn show_decrypt_tab(ui: &mut Ui, state: &mut DecryptState, active_tab: &mut Tab) {
@@ -81,12 +81,13 @@ pub fn show_decrypt_tab(ui: &mut Ui, state: &mut DecryptState, active_tab: &mut 
                         );
                         ui.add_space(6.0);
 
-                        let text_edit = egui::TextEdit::singleline(&mut state.key)
-                            .font(TextStyle::Monospace)
-                            .hint_text("Enter 51-character UTF-8 decryption key...")
-                            .desired_width(ui.available_width());
-
-                        ui.add_enabled(state.enabled, text_edit);
+                        m3_monospace_field(
+                            ui,
+                            &mut state.key,
+                            "Enter 51-character UTF-8 decryption key...",
+                            ui.available_width(),
+                            state.enabled,
+                        );
 
                         ui.add_space(10.0);
 
