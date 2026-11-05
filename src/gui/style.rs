@@ -6,9 +6,13 @@
 //! M3 Primary Tabs, animated M3 Switches, Outlined/Elevated Cards, and semantic status chips.
 
 use egui::{
-    Color32, CornerRadius, CursorIcon, FontFamily, FontId, Frame, Margin, Painter, Pos2, Rect,
-    Response, RichText, Sense, Shadow, Shape, Stroke, StrokeKind, Style, TextStyle, Theme, Ui,
-    Vec2, Visuals, WidgetInfo, pos2, style::Selection, vec2,
+    Color32, CornerRadius, CursorIcon, Event, FontFamily, FontId, Frame, Id, Key, Margin, Painter,
+    PointerButton, Popup, Pos2, Rect, Response, RichText, Sense, Shadow, Shape, Stroke, StrokeKind,
+    Style, TextBuffer as _, TextStyle, Theme, Ui, Vec2, ViewportCommand, Visuals, WidgetInfo, pos2,
+    style::Selection,
+    text::{CCursor, CCursorRange},
+    text_edit::TextEditState,
+    vec2,
 };
 
 /// Material Design 3 color scheme mode (`Light` or `Dark`).
@@ -1191,6 +1195,512 @@ pub fn start_button(ui: &mut Ui, enabled: bool) -> Response {
         p.on_tertiary,
         None,
     )
+}
+
+/// Transient per-widget clipboard/context-menu state stored in [`egui::Context`] memory so that
+/// right-clicking a highlighted selection never collapses the selection and `Paste` via
+/// [`ViewportCommand::RequestPaste`] retains focus and selection across frame boundaries.
+#[derive(Debug, Clone, Copy, Default)]
+struct TextFieldMenuState {
+    preserved_cursor: Option<CCursorRange>,
+    secondary_hold: bool,
+    pending_paste_frames: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipboardAction {
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+fn clamp_cursor_range(range: Option<CCursorRange>, text: &str) -> Option<CCursorRange> {
+    let mut r = range?;
+    let max_chars = text.chars().count();
+    if r.primary.index.0 > max_chars {
+        r.primary = CCursor::new(max_chars);
+    }
+    if r.secondary.index.0 > max_chars {
+        r.secondary = CCursor::new(max_chars);
+    }
+    Some(r)
+}
+
+fn store_cursor_range(ctx: &egui::Context, id: Id, range: CCursorRange) {
+    let mut state = TextEditState::load(ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(range));
+    state.store(ctx, id);
+}
+
+fn execute_clipboard_action(
+    ctx: &egui::Context,
+    id: Id,
+    value: &mut String,
+    state: &mut TextEditState,
+    menu_state: &mut TextFieldMenuState,
+    active_range: CCursorRange,
+    action: ClipboardAction,
+) -> bool {
+    match action {
+        ClipboardAction::Cut => {
+            if active_range.is_empty() {
+                false
+            } else {
+                let selected = active_range.slice_str(value.as_str()).to_owned();
+                ctx.copy_text(selected);
+                let new_cursor = value.delete_selected(&active_range);
+                let new_range = CCursorRange::one(new_cursor);
+                state.cursor.set_char_range(Some(new_range));
+                state.clone().store(ctx, id);
+                menu_state.preserved_cursor = None;
+                ctx.memory_mut(|mem| mem.request_focus(id));
+                ctx.request_repaint();
+                true
+            }
+        }
+        ClipboardAction::Copy => {
+            if !active_range.is_empty() {
+                let selected = active_range.slice_str(value.as_str()).to_owned();
+                ctx.copy_text(selected);
+                state.cursor.set_char_range(Some(active_range));
+                state.clone().store(ctx, id);
+                menu_state.preserved_cursor = None;
+                ctx.memory_mut(|mem| mem.request_focus(id));
+                ctx.request_repaint();
+            }
+            false
+        }
+        ClipboardAction::Paste => {
+            state.cursor.set_char_range(Some(active_range));
+            state.clone().store(ctx, id);
+            menu_state.preserved_cursor = Some(active_range);
+            menu_state.pending_paste_frames = 3;
+            ctx.memory_mut(|mem| mem.request_focus(id));
+            ctx.send_viewport_cmd(ViewportCommand::RequestPaste);
+            ctx.request_repaint();
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            false
+        }
+        ClipboardAction::SelectAll => {
+            let all_range = CCursorRange::select_all_str(value.as_str());
+            state.cursor.set_char_range(Some(all_range));
+            state.clone().store(ctx, id);
+            menu_state.preserved_cursor = None;
+            ctx.memory_mut(|mem| mem.request_focus(id));
+            ctx.request_repaint();
+            false
+        }
+    }
+}
+
+fn context_menu_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool) -> Response {
+    let p = palette(ui);
+    let is_enabled = enabled && ui.is_enabled();
+    let desired_size = vec2(ui.available_width().max(184.0), 30.0);
+    let sense = if is_enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(desired_size, sense);
+
+    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, is_enabled, label));
+
+    if is_enabled && response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let radius = CornerRadius::same(6);
+
+        if is_enabled {
+            if response.is_pointer_button_down_on() {
+                let fill = M3Palette::state_layer(p.surface_container, p.on_surface, 0.12);
+                painter.rect_filled(rect, radius, fill);
+            } else if response.hovered() {
+                let fill = M3Palette::state_layer(p.surface_container, p.on_surface, 0.08);
+                painter.rect_filled(rect, radius, fill);
+            }
+        }
+
+        let label_color = if is_enabled {
+            p.on_surface
+        } else {
+            p.disabled_content()
+        };
+        let shortcut_color = if is_enabled {
+            p.on_surface_variant
+        } else {
+            p.disabled_content()
+        };
+
+        let label_galley = painter.layout_no_wrap(
+            label.to_string(),
+            FontId::new(13.5, FontFamily::Proportional),
+            label_color,
+        );
+        let shortcut_galley = painter.layout_no_wrap(
+            shortcut.to_string(),
+            FontId::new(11.5, FontFamily::Proportional),
+            shortcut_color,
+        );
+
+        let pad_x = 12.0;
+        painter.galley(
+            pos2(
+                rect.left() + pad_x,
+                rect.center().y - label_galley.size().y * 0.5,
+            ),
+            label_galley,
+            label_color,
+        );
+        painter.galley(
+            pos2(
+                rect.right() - pad_x - shortcut_galley.size().x,
+                rect.center().y - shortcut_galley.size().y * 0.5,
+            ),
+            shortcut_galley,
+            shortcut_color,
+        );
+    }
+
+    response
+}
+
+fn render_m3_text_field(
+    ui: &mut Ui,
+    value: &mut String,
+    hint: &str,
+    desired_width: f32,
+    enabled: bool,
+    monospace: bool,
+) -> Response {
+    ui.add_enabled_ui(enabled, |ui| {
+        let id = ui.next_auto_id();
+        ui.skip_ahead_auto_ids(1);
+
+        let popup_id = id.with("popup");
+        let menu_state_id = id.with("m3_text_menu_state");
+
+        let mut menu_state = ui
+            .ctx()
+            .data_mut(|d| d.get_temp::<TextFieldMenuState>(menu_state_id))
+            .unwrap_or_default();
+
+        let popup_was_open = Popup::is_id_open(ui.ctx(), popup_id);
+        let popup_rect = ui.memory(|mem| mem.area_rect(popup_id));
+
+        let (secondary_pressed, secondary_down, primary_pressed, pointer_pos, has_paste_event) = ui
+            .input(|i| {
+                (
+                    i.pointer.button_pressed(PointerButton::Secondary),
+                    i.pointer.button_down(PointerButton::Secondary),
+                    i.pointer.button_pressed(PointerButton::Primary),
+                    i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()),
+                    i.events.iter().any(|e| matches!(e, Event::Paste(_))),
+                )
+            });
+
+        let clicking_outside_popup = primary_pressed
+            && popup_rect.is_some_and(|rect| pointer_pos.is_some_and(|pos| !rect.contains(pos)));
+
+        let pre_cursor = TextEditState::load(ui.ctx(), id)
+            .and_then(|s| clamp_cursor_range(s.cursor.char_range(), value));
+
+        // 1. Pre-show: preserve focus and selection across pending RequestPaste frames,
+        //    secondary-button hold, or while the right-click context menu is open.
+        if menu_state.pending_paste_frames > 0 {
+            ui.memory_mut(|mem| mem.request_focus(id));
+            if let Some(saved) = clamp_cursor_range(menu_state.preserved_cursor, value) {
+                store_cursor_range(ui.ctx(), id, saved);
+            }
+            if has_paste_event {
+                menu_state.pending_paste_frames = 0;
+                menu_state.preserved_cursor = None;
+            } else {
+                menu_state.pending_paste_frames -= 1;
+                ui.ctx().request_repaint();
+            }
+        } else if menu_state.secondary_hold && secondary_down {
+            if let Some(saved) = clamp_cursor_range(menu_state.preserved_cursor, value) {
+                ui.memory_mut(|mem| mem.request_focus(id));
+                store_cursor_range(ui.ctx(), id, saved);
+            }
+        } else if popup_was_open
+            && !clicking_outside_popup
+            && let Some(saved) = clamp_cursor_range(menu_state.preserved_cursor, value)
+        {
+            if ui.memory(|mem| mem.focused()).is_none_or(|f| f == id) {
+                ui.memory_mut(|mem| mem.request_focus(id));
+            }
+            store_cursor_range(ui.ctx(), id, saved);
+        }
+
+        // 2. Render the underlying single-line TextEdit widget.
+        let mut text_edit = egui::TextEdit::singleline(value)
+            .id(id)
+            .hint_text(hint)
+            .desired_width(desired_width);
+        if monospace {
+            text_edit = text_edit.font(TextStyle::Monospace);
+        }
+
+        let mut output = text_edit.show(ui);
+        let mut response = output.response.response;
+
+        // 3. Post-show: prevent right-click press/drag/release from collapsing an existing
+        //    highlighted text selection.
+        if secondary_pressed && response.hovered() {
+            let prior_selection = pre_cursor.filter(|r| !r.is_empty()).or_else(|| {
+                popup_was_open
+                    .then(|| clamp_cursor_range(menu_state.preserved_cursor, value))
+                    .flatten()
+                    .filter(|r| !r.is_empty())
+            });
+
+            if let Some(sel) = prior_selection {
+                menu_state.preserved_cursor = Some(sel);
+                menu_state.secondary_hold = true;
+                output.state.cursor.set_char_range(Some(sel));
+                output.state.clone().store(ui.ctx(), id);
+                ui.memory_mut(|mem| mem.request_focus(id));
+                ui.ctx().request_repaint();
+            } else {
+                menu_state.preserved_cursor =
+                    clamp_cursor_range(output.state.cursor.char_range(), value);
+                menu_state.secondary_hold = true;
+            }
+        } else if menu_state.secondary_hold && secondary_down {
+            if let Some(saved) = clamp_cursor_range(menu_state.preserved_cursor, value) {
+                output.state.cursor.set_char_range(Some(saved));
+                output.state.clone().store(ui.ctx(), id);
+                ui.memory_mut(|mem| mem.request_focus(id));
+            }
+        } else if response.secondary_clicked() {
+            if !menu_state.secondary_hold {
+                menu_state.preserved_cursor = pre_cursor
+                    .filter(|r| !r.is_empty())
+                    .or_else(|| clamp_cursor_range(output.state.cursor.char_range(), value));
+            }
+            menu_state.secondary_hold = false;
+            if let Some(saved) = clamp_cursor_range(menu_state.preserved_cursor, value) {
+                output.state.cursor.set_char_range(Some(saved));
+                output.state.clone().store(ui.ctx(), id);
+                ui.memory_mut(|mem| mem.request_focus(id));
+            }
+        } else if !secondary_down {
+            menu_state.secondary_hold = false;
+        }
+
+        // 4. Fallback keyboard shortcut handling for Ctrl+X / Ctrl+C / Ctrl+V / Ctrl+A when
+        //    raw Event::Key events arrive without prior Event::Cut / Copy / Paste translation
+        //    (e.g., physical Ctrl shortcuts on macOS or direct Event::Key injection).
+        if ui.is_enabled() && ui.memory(|mem| mem.has_focus(id)) {
+            let fallback_action = ui.input(|i| {
+                let has_native_clipboard_event = i
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, Event::Copy | Event::Cut | Event::Paste(_)));
+                if has_native_clipboard_event {
+                    return None;
+                }
+                i.events.iter().find_map(|event| match event {
+                    Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift =>
+                    {
+                        match key {
+                            Key::X => Some(ClipboardAction::Cut),
+                            Key::C => Some(ClipboardAction::Copy),
+                            Key::V => Some(ClipboardAction::Paste),
+                            Key::A => Some(ClipboardAction::SelectAll),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+            });
+
+            if let Some(action) = fallback_action {
+                let active_range = clamp_cursor_range(output.state.cursor.char_range(), value)
+                    .unwrap_or_else(|| CCursorRange::one(CCursor::end_of_str(value)));
+                if execute_clipboard_action(
+                    ui.ctx(),
+                    id,
+                    value,
+                    &mut output.state,
+                    &mut menu_state,
+                    active_range,
+                    action,
+                ) {
+                    response.mark_changed();
+                }
+            }
+        }
+
+        // 5. Material Design 3 right-click pop-up context menu with pure-ASCII labels & hints.
+        let mut menu_mutated_text = false;
+        if ui.is_enabled() {
+            response.context_menu(|ui| {
+                ui.set_min_width(184.0);
+                ui.spacing_mut().item_spacing.y = 2.0;
+
+                let active_range = clamp_cursor_range(
+                    menu_state
+                        .preserved_cursor
+                        .or_else(|| output.state.cursor.char_range()),
+                    value,
+                )
+                .unwrap_or_else(|| CCursorRange::one(CCursor::end_of_str(value)));
+
+                let has_selection = !active_range.is_empty();
+                let has_text = !value.is_empty();
+
+                if context_menu_item(ui, "Cut", "Ctrl+X", has_selection).clicked() {
+                    menu_mutated_text |= execute_clipboard_action(
+                        ui.ctx(),
+                        id,
+                        value,
+                        &mut output.state,
+                        &mut menu_state,
+                        active_range,
+                        ClipboardAction::Cut,
+                    );
+                    ui.close();
+                }
+
+                if context_menu_item(ui, "Copy", "Ctrl+C", has_selection).clicked() {
+                    menu_mutated_text |= execute_clipboard_action(
+                        ui.ctx(),
+                        id,
+                        value,
+                        &mut output.state,
+                        &mut menu_state,
+                        active_range,
+                        ClipboardAction::Copy,
+                    );
+                    ui.close();
+                }
+
+                if context_menu_item(ui, "Paste", "Ctrl+V", true).clicked() {
+                    menu_mutated_text |= execute_clipboard_action(
+                        ui.ctx(),
+                        id,
+                        value,
+                        &mut output.state,
+                        &mut menu_state,
+                        active_range,
+                        ClipboardAction::Paste,
+                    );
+                    ui.close();
+                }
+
+                ui.add_space(2.0);
+                ui.separator();
+                ui.add_space(2.0);
+
+                if context_menu_item(ui, "Select All", "Ctrl+A", has_text).clicked() {
+                    menu_mutated_text |= execute_clipboard_action(
+                        ui.ctx(),
+                        id,
+                        value,
+                        &mut output.state,
+                        &mut menu_state,
+                        active_range,
+                        ClipboardAction::SelectAll,
+                    );
+                    ui.close();
+                }
+            });
+        }
+        if menu_mutated_text {
+            response.mark_changed();
+        }
+
+        let popup_is_open = response.context_menu_opened();
+        if !popup_is_open && !menu_state.secondary_hold && menu_state.pending_paste_frames == 0 {
+            menu_state.preserved_cursor = None;
+        }
+
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(menu_state_id, menu_state));
+
+        response
+    })
+    .inner
+}
+
+/// Renders an enabled single-line Material Design 3 text field supporting full text selection,
+/// standard `Ctrl+X` / `Ctrl+C` / `Ctrl+V` / `Ctrl+A` keyboard shortcuts, and a right-click
+/// pop-up context menu (`Cut`, `Copy`, `Paste`, `Select All`).
+///
+/// # Examples
+/// ```
+/// use datapipe::gui::style::m3_text_field;
+///
+/// let ctx = egui::Context::default();
+/// let mut url = String::from("http://127.0.0.1:8080");
+/// let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+///     let _response = m3_text_field(ui, &mut url, "http://example.com", 240.0);
+/// });
+/// ```
+pub fn m3_text_field(ui: &mut Ui, value: &mut String, hint: &str, desired_width: f32) -> Response {
+    render_m3_text_field(ui, value, hint, desired_width, true, false)
+}
+
+/// Renders a single-line Material Design 3 text field with explicit `enabled` control,
+/// supporting text highlighting, `Ctrl+X` / `Ctrl+C` / `Ctrl+V` / `Ctrl+A` shortcuts, and a
+/// right-click pop-up context menu (`Cut`, `Copy`, `Paste`, `Select All`) when enabled.
+///
+/// # Examples
+/// ```
+/// use datapipe::gui::style::m3_text_field_enabled;
+///
+/// let ctx = egui::Context::default();
+/// let mut path = String::from("/tmp/cert.der");
+/// let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+///     let _response = m3_text_field_enabled(ui, &mut path, "Certificate (.der)", 220.0, true);
+/// });
+/// ```
+pub fn m3_text_field_enabled(
+    ui: &mut Ui,
+    value: &mut String,
+    hint: &str,
+    desired_width: f32,
+    enabled: bool,
+) -> Response {
+    render_m3_text_field(ui, value, hint, desired_width, enabled, false)
+}
+
+/// Renders a single-line monospace Material Design 3 text field (suitable for 51-byte
+/// cryptographic keys) with explicit `enabled` control, supporting text highlighting,
+/// `Ctrl+X` / `Ctrl+C` / `Ctrl+V` / `Ctrl+A` shortcuts, and a right-click pop-up context menu.
+///
+/// # Examples
+/// ```
+/// use datapipe::gui::style::m3_monospace_field;
+///
+/// let ctx = egui::Context::default();
+/// let mut key = String::new();
+/// let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+///     let _response = m3_monospace_field(ui, &mut key, "Enter 51-byte key...", 320.0, true);
+/// });
+/// ```
+pub fn m3_monospace_field(
+    ui: &mut Ui,
+    value: &mut String,
+    hint: &str,
+    desired_width: f32,
+    enabled: bool,
+) -> Response {
+    render_m3_text_field(ui, value, hint, desired_width, enabled, true)
 }
 
 /// Renders the standardized M3 Bottom Action Bar inside a tab view.

@@ -1,6 +1,6 @@
 [package]
 name = "datapipe"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["Richard Scott McNew"]
 description = "Stream data from here to there"
@@ -34,7 +34,7 @@ url = { version = "2", features = ["serde"] }
 webpki-roots = "1"
 
 # Optional GUI dependencies
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wayland", "x11", "glow"], optional = true }
+eframe = { version = "0.37", default-features = false, features = ["clipboard", "default_fonts", "wayland", "x11", "glow"], optional = true }
 egui = { version = "0.37", optional = true }
 rfd = { version = "0.17", optional = true }
 

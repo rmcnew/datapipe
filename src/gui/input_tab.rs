@@ -1,8 +1,8 @@
 //! Input tab Material Design 3 view and protocol configuration form fields.
 
 use crate::gui::style::{
-    bottom_action_bar, compact_tonal_button, m3_card, m3_tonal_card, nav_next_button, palette,
-    section_header, status_chip,
+    bottom_action_bar, compact_tonal_button, m3_card, m3_text_field, m3_text_field_enabled,
+    m3_tonal_card, nav_next_button, palette, section_header, status_chip,
 };
 use crate::gui::types::{InputState, InputType, Tab};
 use egui::{Frame, Layout, Margin, RichText, Ui};
@@ -91,10 +91,7 @@ fn field_label(ui: &mut Ui, label: &str) {
 fn file_picker_row(ui: &mut Ui, value: &mut String, hint: &str, enabled: bool) {
     ui.horizontal(|ui| {
         let text_width = (ui.available_width() - 96.0).max(120.0);
-        let edit = egui::TextEdit::singleline(value)
-            .hint_text(hint)
-            .desired_width(text_width);
-        ui.add_enabled(enabled, edit);
+        m3_text_field_enabled(ui, value, hint, text_width, enabled);
 
         if compact_tonal_button(ui, "Browse...", enabled).clicked()
             && let Some(path) = rfd::FileDialog::new().pick_file()
@@ -149,36 +146,30 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
             }
             InputType::Http => {
                 field_label(ui, "HTTP Endpoint URL");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.http_url)
-                        .hint_text("http://example.com:8080/stream")
-                        .desired_width(ui.available_width()),
+                m3_text_field(
+                    ui,
+                    &mut state.http_url,
+                    "http://example.com:8080/stream",
+                    ui.available_width(),
                 );
                 ui.end_row();
 
                 field_label(ui, "Poll Interval (ms)");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.http_rate)
-                        .hint_text("1000")
-                        .desired_width(140.0),
-                );
+                m3_text_field(ui, &mut state.http_rate, "1000", 140.0);
                 ui.end_row();
             }
             InputType::Https => {
                 field_label(ui, "HTTPS Endpoint URL");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.https_url)
-                        .hint_text("https://example.com:8443/stream")
-                        .desired_width(ui.available_width()),
+                m3_text_field(
+                    ui,
+                    &mut state.https_url,
+                    "https://example.com:8443/stream",
+                    ui.available_width(),
                 );
                 ui.end_row();
 
                 field_label(ui, "Poll Interval (ms)");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.https_rate)
-                        .hint_text("1000")
-                        .desired_width(140.0),
-                );
+                m3_text_field(ui, &mut state.https_rate, "1000", 140.0);
                 ui.end_row();
 
                 field_label(ui, "Root Certificates (PEM)");
@@ -226,29 +217,17 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
             InputType::Stdin => {}
             InputType::Tcp => {
                 field_label(ui, "Remote TCP Address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.tcp_address)
-                        .hint_text("127.0.0.1:9000")
-                        .desired_width(260.0),
-                );
+                m3_text_field(ui, &mut state.tcp_address, "127.0.0.1:9000", 260.0);
                 ui.end_row();
             }
             InputType::TcpListen => {
                 field_label(ui, "Local Listen Address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.tcp_listen_address)
-                        .hint_text("0.0.0.0:9000")
-                        .desired_width(260.0),
-                );
+                m3_text_field(ui, &mut state.tcp_listen_address, "0.0.0.0:9000", 260.0);
                 ui.end_row();
             }
             InputType::Tls => {
                 field_label(ui, "Remote TLS Address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.tls_address)
-                        .hint_text("127.0.0.1:9443")
-                        .desired_width(260.0),
-                );
+                m3_text_field(ui, &mut state.tls_address, "127.0.0.1:9443", 260.0);
                 ui.end_row();
 
                 field_label(ui, "Client Cert Chain (DER)");
@@ -288,11 +267,7 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
             }
             InputType::TlsListen => {
                 field_label(ui, "Local Listen Address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.tls_listen_address)
-                        .hint_text("0.0.0.0:9443")
-                        .desired_width(260.0),
-                );
+                m3_text_field(ui, &mut state.tls_listen_address, "0.0.0.0:9443", 260.0);
                 ui.end_row();
 
                 let manual_certs = !state.tls_listen_generate_self_signed;
@@ -331,19 +306,16 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
             }
             InputType::Udp => {
                 field_label(ui, "UDP Bind Address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.udp_address)
-                        .hint_text("0.0.0.0:9100")
-                        .desired_width(260.0),
-                );
+                m3_text_field(ui, &mut state.udp_address, "0.0.0.0:9100", 260.0);
                 ui.end_row();
             }
             InputType::UdpMulticast => {
                 field_label(ui, "Multicast Group Address");
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.udp_multicast_address)
-                        .hint_text("239.255.0.1:9200")
-                        .desired_width(260.0),
+                m3_text_field(
+                    ui,
+                    &mut state.udp_multicast_address,
+                    "239.255.0.1:9200",
+                    260.0,
                 );
                 ui.end_row();
             }

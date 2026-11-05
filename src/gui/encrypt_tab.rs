@@ -1,11 +1,12 @@
 //! Encrypt tab Material Design 3 view, key generation, clipboard copy, and validation.
 
 use crate::gui::style::{
-    bottom_action_bar, compact_tonal_button, m3_card, m3_switch, nav_back_button, nav_next_button,
-    palette, section_header, status_chip, status_chip_with_dot, tonal_button,
+    bottom_action_bar, compact_tonal_button, m3_card, m3_monospace_field, m3_switch,
+    nav_back_button, nav_next_button, palette, section_header, status_chip, status_chip_with_dot,
+    tonal_button,
 };
 use crate::gui::types::{EncryptState, Tab};
-use egui::{CornerRadius, Frame, Layout, Margin, ProgressBar, RichText, TextStyle, Ui};
+use egui::{CornerRadius, Frame, Layout, Margin, ProgressBar, RichText, Ui};
 
 /// Renders the Encrypt stage configuration tab using Material Design 3 cards and controls.
 pub fn show_encrypt_tab(ui: &mut Ui, state: &mut EncryptState, active_tab: &mut Tab) {
@@ -89,12 +90,13 @@ pub fn show_encrypt_tab(ui: &mut Ui, state: &mut EncryptState, active_tab: &mut 
 
                         ui.horizontal(|ui| {
                             let text_width = (ui.available_width() - 94.0).max(120.0);
-                            let text_edit = egui::TextEdit::singleline(&mut state.key)
-                                .font(TextStyle::Monospace)
-                                .hint_text("Enter or generate a 51-character UTF-8 key...")
-                                .desired_width(text_width);
-
-                            ui.add_enabled(state.enabled, text_edit);
+                            m3_monospace_field(
+                                ui,
+                                &mut state.key,
+                                "Enter or generate a 51-character UTF-8 key...",
+                                text_width,
+                                state.enabled,
+                            );
 
                             let can_copy = state.enabled && !state.key.is_empty();
                             if compact_tonal_button(ui, "Copy", can_copy)
