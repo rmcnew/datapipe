@@ -1,9 +1,9 @@
 //! Output tab Material Design 3 view, dynamic multi-output fan-out cards (1 to 64 sinks), and form fields.
 
 use crate::gui::style::{
-    bottom_action_bar, compact_tonal_button, danger_outlined_button, m3_card, m3_text_field,
-    m3_tonal_card, nav_back_button, nav_next_button, palette, plus_button, section_header,
-    status_chip,
+    bottom_action_bar, compact_tonal_button, danger_outlined_button, m3_card, m3_monospace_field,
+    m3_text_field, m3_tonal_card, nav_back_button, nav_next_button, palette, plus_button,
+    section_header, status_chip,
 };
 use crate::gui::types::{OutputState, OutputType, Tab};
 use egui::{Frame, Layout, Margin, RichText, Ui};
@@ -346,6 +346,62 @@ fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usiz
                     ui,
                     &mut state.tls_skip_server_verify,
                     "Skip Server Identity Verification",
+                );
+                ui.end_row();
+            }
+            OutputType::Iroh => {
+                field_label(ui, "Remote EndpointId");
+                m3_monospace_field(
+                    ui,
+                    &mut state.iroh_peer_id,
+                    "64-character hex public key (EndpointId)",
+                    ui.available_width(),
+                    true,
+                );
+                ui.end_row();
+
+                field_label(ui, "Direct Addresses (Optional)");
+                m3_text_field(
+                    ui,
+                    &mut state.iroh_direct_addrs,
+                    "127.0.0.1:11204, 192.168.1.10:11204",
+                    ui.available_width(),
+                );
+                ui.end_row();
+
+                field_label(ui, "Custom Relay URL (Optional)");
+                m3_text_field(
+                    ui,
+                    &mut state.iroh_relay_url,
+                    "https://use1-1.relay.iroh.network.",
+                    ui.available_width(),
+                );
+                ui.end_row();
+
+                field_label(ui, "ALPN Protocol");
+                m3_text_field(ui, &mut state.iroh_alpn, "datapipe/iroh/1", 260.0);
+                ui.end_row();
+
+                field_label(ui, "Local Secret Key (Optional)");
+                ui.horizontal(|ui| {
+                    let text_width = (ui.available_width() - 120.0).max(140.0);
+                    m3_monospace_field(
+                        ui,
+                        &mut state.iroh_secret_key,
+                        "Optional 64-character hex Ed25519 secret key",
+                        text_width,
+                        true,
+                    );
+                    if compact_tonal_button(ui, "Generate Key", true).clicked() {
+                        state.generate_iroh_key();
+                    }
+                });
+                ui.end_row();
+
+                field_label(ui, "Relay Transport");
+                ui.checkbox(
+                    &mut state.iroh_no_relay,
+                    "Disable Default Relay Servers (Direct IP Only)",
                 );
                 ui.end_row();
             }

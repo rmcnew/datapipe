@@ -8,10 +8,13 @@
 
 use crate::args::{
     DecryptionArgs, EncryptionArgs, HttpInputArgs, HttpOutputArgs, HttpsInputArgs, HttpsOutputArgs,
-    InputArgs, LoggingArgs, OutputArgs, ProgramArgs, TlsInputArgs, TlsListenInputArgs,
-    TlsOutputArgs,
+    InputArgs, IrohInputArgs, IrohListenInputArgs, IrohOutputArgs, LoggingArgs, OutputArgs,
+    ProgramArgs, TlsInputArgs, TlsListenInputArgs, TlsOutputArgs,
 };
 use crate::datapipe_types::{DatapipeError, EncryptionKey, error_root_cause};
+use crate::iroh_reader_writer::{
+    parse_iroh_endpoint_id, parse_iroh_relay_url, parse_iroh_secret_key, parse_iroh_socket_addrs,
+};
 use crate::parameters::Parameters;
 use log::error;
 use serde::{Deserialize, Serialize};
@@ -35,6 +38,12 @@ pub struct DatapipeConfig {
     /// Additional TLS listen input parameters
     #[serde(default, skip_serializing_if = "TlsListenInputArgs::is_empty")]
     pub tls_listen_input: TlsListenInputArgs,
+    /// Additional Iroh outbound input parameters
+    #[serde(default, skip_serializing_if = "IrohInputArgs::is_empty")]
+    pub iroh_input: IrohInputArgs,
+    /// Additional Iroh listen input parameters
+    #[serde(default, skip_serializing_if = "IrohListenInputArgs::is_empty")]
+    pub iroh_listen_input: IrohListenInputArgs,
     /// In-line decryption parameters
     #[serde(default, skip_serializing_if = "DecryptionArgs::is_empty")]
     pub decryption_args: DecryptionArgs,
@@ -53,6 +62,9 @@ pub struct DatapipeConfig {
     /// Additional TLS output parameters
     #[serde(default, skip_serializing_if = "TlsOutputArgs::is_empty")]
     pub tls_output: TlsOutputArgs,
+    /// Additional Iroh output parameters
+    #[serde(default, skip_serializing_if = "IrohOutputArgs::is_empty")]
+    pub iroh_output: IrohOutputArgs,
     /// Multiple output destinations configuration (supports 1 to 64 outputs)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outputs: Option<Vec<OutputDestinationConfig>>,
@@ -79,6 +91,30 @@ pub struct OutputDestinationConfig {
     /// Additional TLS output parameters
     #[serde(default, skip_serializing_if = "TlsOutputArgs::is_empty")]
     pub tls_output: TlsOutputArgs,
+    /// Additional Iroh output parameters
+    #[serde(default, skip_serializing_if = "IrohOutputArgs::is_empty")]
+    pub iroh_output: IrohOutputArgs,
+}
+
+fn validate_iroh_output(peer_str: &str, args: &IrohOutputArgs) -> Result<(), DatapipeError> {
+    parse_iroh_endpoint_id(peer_str)?;
+    if let Some(ref addrs) = args.iroh_output_addrs {
+        parse_iroh_socket_addrs(addrs)?;
+    }
+    if let Some(ref url) = args.iroh_output_relay_url {
+        parse_iroh_relay_url(url)?;
+    }
+    if let Some(ref key) = args.iroh_output_secret_key {
+        parse_iroh_secret_key(key)?;
+    }
+    if let Some(ref alpn) = args.iroh_output_alpn
+        && alpn.trim().is_empty()
+    {
+        let error_message = "Iroh output ALPN cannot be empty.".to_string();
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
+    Ok(())
 }
 
 impl OutputDestinationConfig {
@@ -151,6 +187,9 @@ impl OutputDestinationConfig {
         if self.output.udp_output.is_some() {
             output_count += 1;
         }
+        if self.output.iroh_output.is_some() {
+            output_count += 1;
+        }
 
         if output_count == 0 {
             let error_message =
@@ -191,6 +230,10 @@ impl OutputDestinationConfig {
                     .to_string();
             error!("{error_message}");
             return Err(DatapipeError::ValidationError(error_message));
+        }
+
+        if let Some(ref peer_str) = self.output.iroh_output {
+            validate_iroh_output(peer_str, &self.iroh_output)?;
         }
 
         Ok(())
@@ -361,6 +404,12 @@ impl DatapipeConfig {
         if self.input.udp_multicast_input.is_some() {
             input_count += 1;
         }
+        if self.input.iroh_input.is_some() {
+            input_count += 1;
+        }
+        if self.input.iroh_listen_input {
+            input_count += 1;
+        }
 
         if input_count == 0 {
             let error_message =
@@ -424,6 +473,9 @@ impl DatapipeConfig {
             if self.output.udp_output.is_some() {
                 output_count += 1;
             }
+            if self.output.iroh_output.is_some() {
+                output_count += 1;
+            }
 
             if output_count == 0 {
                 let error_message =
@@ -458,6 +510,10 @@ impl DatapipeConfig {
                         .to_string();
                 error!("{error_message}");
                 return Err(DatapipeError::ValidationError(error_message));
+            }
+
+            if let Some(ref peer_str) = self.output.iroh_output {
+                validate_iroh_output(peer_str, &self.iroh_output)?;
             }
         }
 
@@ -500,6 +556,58 @@ impl DatapipeConfig {
                     .to_string();
             error!("{error_message}");
             return Err(DatapipeError::ValidationError(error_message));
+        }
+
+        // Validate Iroh outbound input options
+        if let Some(ref peer_str) = self.input.iroh_input {
+            parse_iroh_endpoint_id(peer_str)?;
+            if let Some(ref addrs) = self.iroh_input.iroh_input_addrs {
+                parse_iroh_socket_addrs(addrs)?;
+            }
+            if let Some(ref url) = self.iroh_input.iroh_input_relay_url {
+                parse_iroh_relay_url(url)?;
+            }
+            if let Some(ref key) = self.iroh_input.iroh_input_secret_key {
+                parse_iroh_secret_key(key)?;
+            }
+            if let Some(ref alpn) = self.iroh_input.iroh_input_alpn
+                && alpn.trim().is_empty()
+            {
+                let error_message = "Iroh input ALPN cannot be empty.".to_string();
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
+        }
+
+        // Validate Iroh listen input options
+        if self.input.iroh_listen_input {
+            if let Some(ref bind_addr) = self.iroh_listen_input.iroh_listen_input_bind_addr {
+                bind_addr
+                    .trim()
+                    .parse::<std::net::SocketAddr>()
+                    .map_err(|err| {
+                        let error_message =
+                            format!("Invalid Iroh listen bind address '{bind_addr}': {err}");
+                        error!("{error_message}");
+                        DatapipeError::ValidationError(error_message)
+                    })?;
+            }
+            if let Some(ref key) = self.iroh_listen_input.iroh_listen_input_secret_key {
+                parse_iroh_secret_key(key)?;
+            }
+            if let Some(ref url) = self.iroh_listen_input.iroh_listen_input_relay_url {
+                parse_iroh_relay_url(url)?;
+            }
+            if let Some(ref peer) = self.iroh_listen_input.iroh_listen_input_allowed_peer {
+                parse_iroh_endpoint_id(peer)?;
+            }
+            if let Some(ref alpn) = self.iroh_listen_input.iroh_listen_input_alpn
+                && alpn.trim().is_empty()
+            {
+                let error_message = "Iroh listen input ALPN cannot be empty.".to_string();
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
         }
 
         // Validate encryption key
@@ -560,6 +668,7 @@ impl DatapipeConfig {
                     http_output: dest.http_output.clone(),
                     https_output: dest.https_output.clone(),
                     tls_output: dest.tls_output.clone(),
+                    iroh_output: dest.iroh_output.clone(),
                     ..Default::default()
                 };
                 let mut dest_writers = out_args.get_output_writers().await?;
@@ -593,12 +702,15 @@ impl From<&ProgramArgs> for DatapipeConfig {
             https_input: args.https_input.clone(),
             tls_input: args.tls_input.clone(),
             tls_listen_input: args.tls_listen_input.clone(),
+            iroh_input: args.iroh_input.clone(),
+            iroh_listen_input: args.iroh_listen_input.clone(),
             decryption_args: args.decryption_args.clone(),
             encryption_args: args.encryption_args.clone(),
             output: args.output.clone(),
             http_output: args.http_output.clone(),
             https_output: args.https_output.clone(),
             tls_output: args.tls_output.clone(),
+            iroh_output: args.iroh_output.clone(),
             outputs: None,
             logging_args: args.logging_args.clone(),
             no_metrics: args.no_metrics,
@@ -620,12 +732,15 @@ impl From<DatapipeConfig> for ProgramArgs {
             https_input: config.https_input,
             tls_input: config.tls_input,
             tls_listen_input: config.tls_listen_input,
+            iroh_input: config.iroh_input,
+            iroh_listen_input: config.iroh_listen_input,
             decryption_args: config.decryption_args,
             encryption_args: config.encryption_args,
             output: config.output,
             http_output: config.http_output,
             https_output: config.https_output,
             tls_output: config.tls_output,
+            iroh_output: config.iroh_output,
             logging_args: config.logging_args,
         }
     }
@@ -724,6 +839,37 @@ mod tests {
             outs.push(out);
         }
         config.outputs = Some(outs);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_iroh_listen_and_output_roundtrip() -> Result<(), DatapipeError> {
+        let secret_key = iroh::SecretKey::from_bytes(&[9u8; 32]);
+        let secret_hex = crate::iroh_reader_writer::format_iroh_secret_key_hex(&secret_key);
+        let peer_id = secret_key.public().to_string();
+
+        let mut config = DatapipeConfig::new();
+        config.input.iroh_listen_input = true;
+        config.iroh_listen_input.iroh_listen_input_bind_addr = Some("127.0.0.1:11204".to_string());
+        config.iroh_listen_input.iroh_listen_input_secret_key = Some(secret_hex);
+        config.iroh_listen_input.iroh_listen_input_no_relay = true;
+
+        config.output.iroh_output = Some(peer_id);
+        config.iroh_output.iroh_output_addrs = Some("127.0.0.1:11204".to_string());
+        config.iroh_output.iroh_output_no_relay = true;
+
+        let toml_str = config.to_toml_string()?;
+        let parsed = DatapipeConfig::from_toml_str(&toml_str)?;
+        assert_eq!(config, parsed);
+        parsed.validate()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_validate_invalid_iroh_endpoint_id() {
+        let mut config = DatapipeConfig::new();
+        config.input.iroh_input = Some("not-a-valid-endpoint-id".to_string());
+        config.output.stdout_output = true;
         assert!(config.validate().is_err());
     }
 }

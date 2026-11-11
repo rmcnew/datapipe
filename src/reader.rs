@@ -2,6 +2,8 @@ use crate::datapipe_types::InputReader;
 use crate::file_reader::FileReader;
 use crate::http_reader::HttpReader;
 use crate::https_reader::HttpsReader;
+use crate::iroh_listen_reader::IrohListenReader;
+use crate::iroh_reader_writer::IrohReader;
 use crate::stdin_reader::StdinReader;
 use crate::tcp_listen_reader::TcpListenReader;
 use crate::tcp_reader_writer::TcpReaderWriter;
@@ -17,6 +19,8 @@ pub enum Reader {
     File(FileReader),
     Http(HttpReader),
     Https(HttpsReader),
+    Iroh(IrohReader),
+    IrohListen(IrohListenReader),
     Stdin(StdinReader),
     Tcp(TcpReaderWriter),
     TcpListen(TcpListenReader),
@@ -32,6 +36,8 @@ impl InputReader for Reader {
             Self::File(file_reader) => file_reader.read().await,
             Self::Http(http_reader) => http_reader.read().await,
             Self::Https(https_reader) => https_reader.read().await,
+            Self::Iroh(iroh_reader) => iroh_reader.read().await,
+            Self::IrohListen(iroh_listen_reader) => iroh_listen_reader.read().await,
             Self::Stdin(stdin_reader) => stdin_reader.read().await,
             Self::Tcp(tcp_reader) => tcp_reader.read().await,
             Self::TcpListen(tcp_listen_reader) => tcp_listen_reader.read().await,
@@ -67,6 +73,20 @@ impl std::convert::From<HttpReader> for Reader {
 impl std::convert::From<HttpsReader> for Reader {
     fn from(value: HttpsReader) -> Self {
         Self::Https(value)
+    }
+}
+
+/// Convert an IrohReader to a Reader
+impl std::convert::From<IrohReader> for Reader {
+    fn from(value: IrohReader) -> Self {
+        Self::Iroh(value)
+    }
+}
+
+/// Convert an IrohListenReader to a Reader
+impl std::convert::From<IrohListenReader> for Reader {
+    fn from(value: IrohListenReader) -> Self {
+        Self::IrohListen(value)
     }
 }
 

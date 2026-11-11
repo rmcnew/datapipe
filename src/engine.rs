@@ -251,6 +251,12 @@ async fn writer_child(
             }
         }
     }
+    for writer in &mut writers {
+        if let Err(err) = writer.close().await {
+            let error_cause = error_root_cause(&err);
+            warn!("writer_child: Error closing output writer: {error_cause}");
+        }
+    }
     Ok(())
 }
 

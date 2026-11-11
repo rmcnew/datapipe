@@ -1,8 +1,8 @@
 //! Input tab Material Design 3 view and protocol configuration form fields.
 
 use crate::gui::style::{
-    bottom_action_bar, compact_tonal_button, m3_card, m3_text_field, m3_text_field_enabled,
-    m3_tonal_card, nav_next_button, palette, section_header, status_chip,
+    bottom_action_bar, compact_tonal_button, m3_card, m3_monospace_field, m3_text_field,
+    m3_text_field_enabled, m3_tonal_card, nav_next_button, palette, section_header, status_chip,
 };
 use crate::gui::types::{InputState, InputType, Tab};
 use egui::{Frame, Layout, Margin, RichText, Ui};
@@ -316,6 +316,142 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
                     &mut state.udp_multicast_address,
                     "239.255.0.1:9200",
                     260.0,
+                );
+                ui.end_row();
+            }
+            InputType::Iroh => {
+                field_label(ui, "Remote EndpointId");
+                m3_monospace_field(
+                    ui,
+                    &mut state.iroh_peer_id,
+                    "64-character hex public key (EndpointId)",
+                    ui.available_width(),
+                    true,
+                );
+                ui.end_row();
+
+                field_label(ui, "Direct Addresses (Optional)");
+                m3_text_field(
+                    ui,
+                    &mut state.iroh_direct_addrs,
+                    "127.0.0.1:11204, 192.168.1.10:11204",
+                    ui.available_width(),
+                );
+                ui.end_row();
+
+                field_label(ui, "Custom Relay URL (Optional)");
+                m3_text_field(
+                    ui,
+                    &mut state.iroh_relay_url,
+                    "https://use1-1.relay.iroh.network.",
+                    ui.available_width(),
+                );
+                ui.end_row();
+
+                field_label(ui, "ALPN Protocol");
+                m3_text_field(ui, &mut state.iroh_alpn, "datapipe/iroh/1", 260.0);
+                ui.end_row();
+
+                field_label(ui, "Local Secret Key (Optional)");
+                ui.horizontal(|ui| {
+                    let text_width = (ui.available_width() - 120.0).max(140.0);
+                    m3_monospace_field(
+                        ui,
+                        &mut state.iroh_secret_key,
+                        "Optional 64-character hex Ed25519 secret key",
+                        text_width,
+                        true,
+                    );
+                    if compact_tonal_button(ui, "Generate Key", true).clicked() {
+                        state.generate_iroh_input_key();
+                    }
+                });
+                ui.end_row();
+
+                field_label(ui, "Relay Transport");
+                ui.checkbox(
+                    &mut state.iroh_no_relay,
+                    "Disable Default Relay Servers (Direct IP Only)",
+                );
+                ui.end_row();
+            }
+            InputType::IrohListen => {
+                field_label(ui, "Local Bind Address (Optional)");
+                m3_text_field(
+                    ui,
+                    &mut state.iroh_listen_bind_addr,
+                    "0.0.0.0:11204 (leave empty for OS port)",
+                    280.0,
+                );
+                ui.end_row();
+
+                field_label(ui, "Local Secret Key (Optional)");
+                ui.horizontal(|ui| {
+                    let text_width = (ui.available_width() - 120.0).max(140.0);
+                    m3_monospace_field(
+                        ui,
+                        &mut state.iroh_listen_secret_key,
+                        "Optional 64-character hex secret key for deterministic EndpointId",
+                        text_width,
+                        true,
+                    );
+                    if compact_tonal_button(ui, "Generate Key", true).clicked() {
+                        state.generate_iroh_listen_key();
+                    }
+                });
+                ui.end_row();
+
+                field_label(ui, "Derived EndpointId");
+                if let Some(endpoint_id) = state.iroh_listen_derived_endpoint_id() {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(&endpoint_id)
+                                .monospace()
+                                .size(12.5)
+                                .color(p.primary),
+                        );
+                        if compact_tonal_button(ui, "Copy ID", true).clicked() {
+                            ui.ctx().copy_text(endpoint_id);
+                        }
+                    });
+                } else {
+                    ui.label(
+                        RichText::new(
+                            "Auto-generated on startup (generate or enter a secret key above to pre-compute)",
+                        )
+                        .size(12.5)
+                        .color(p.on_surface_variant),
+                    );
+                }
+                ui.end_row();
+
+                field_label(ui, "Allowed Peer ID (Optional)");
+                m3_monospace_field(
+                    ui,
+                    &mut state.iroh_listen_allowed_peer,
+                    "Optional remote EndpointId filter",
+                    ui.available_width(),
+                    true,
+                );
+                ui.end_row();
+
+                field_label(ui, "Custom Relay URL (Optional)");
+                m3_text_field(
+                    ui,
+                    &mut state.iroh_listen_relay_url,
+                    "https://use1-1.relay.iroh.network.",
+                    ui.available_width(),
+                );
+                ui.end_row();
+
+                field_label(ui, "ALPN Protocol");
+                m3_text_field(ui, &mut state.iroh_listen_alpn, "datapipe/iroh/1", 260.0);
+                ui.end_row();
+
+                field_label(ui, "Relay Transport");
+                ui.checkbox(
+                    &mut state.iroh_listen_no_relay,
+                    "Disable Default Relay Servers (Direct IP Only)",
                 );
                 ui.end_row();
             }

@@ -808,3 +808,50 @@ fn test_gui_cut_copy_paste_keyboard_shortcuts_across_all_tabs() {
     assert!(find_rendered_text_pos(&menu_out.shapes, "Paste").is_some());
     assert!(find_rendered_text_pos(&menu_out.shapes, "Select All").is_some());
 }
+
+#[test]
+fn test_gui_iroh_input_listen_and_output_rendering_and_key_generation() {
+    let mut app = DatapipeApp::new().expect("Failed to create DatapipeApp");
+    let ctx = egui::Context::default();
+
+    // Configure Iroh Listen input and generate a secret key
+    app.active_tab = Tab::Input;
+    app.input_state.input_type = InputType::IrohListen;
+    app.input_state.iroh_listen_bind_addr = "127.0.0.1:11204".to_string();
+    app.input_state.iroh_listen_no_relay = true;
+    app.input_state.generate_iroh_listen_key();
+    let endpoint_id = app
+        .input_state
+        .iroh_listen_derived_endpoint_id()
+        .expect("Derived EndpointId should be present");
+
+    let out = ctx.run_ui(make_input_with_events(vec![]), |ui| {
+        app.render(ui);
+    });
+    assert_all_rendered_text_is_ascii(&out.shapes);
+    assert!(
+        find_rendered_text_pos(&out.shapes, &endpoint_id).is_some(),
+        "Derived EndpointId should be rendered in Iroh Listen tab"
+    );
+
+    // Configure Iroh output sink targeting that EndpointId
+    app.active_tab = Tab::Output;
+    app.output_states[0].output_type = OutputType::Iroh;
+    app.output_states[0].iroh_peer_id = endpoint_id;
+    app.output_states[0].iroh_direct_addrs = "127.0.0.1:11204".to_string();
+    app.output_states[0].iroh_no_relay = true;
+
+    let out = ctx.run_ui(make_input_with_events(vec![]), |ui| {
+        app.render(ui);
+    });
+    assert_all_rendered_text_is_ascii(&out.shapes);
+
+    let config = states_to_config(
+        &app.input_state,
+        &app.decrypt_state,
+        &app.encrypt_state,
+        &app.output_states,
+    )
+    .expect("Iroh GUI configuration should be valid");
+    assert!(config.validate().is_ok());
+}
