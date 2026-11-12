@@ -825,9 +825,10 @@ fn test_gui_iroh_input_listen_and_output_rendering_and_key_generation() {
         .iroh_listen_derived_endpoint_id()
         .expect("Derived EndpointId should be present");
 
-    let out = ctx.run_ui(make_input_with_events(vec![]), |ui| {
+    let mut out = ctx.run_ui(make_input_with_events(vec![]), |ui| {
         app.render(ui);
     });
+    out.textures_delta.clear();
     assert_all_rendered_text_is_ascii(&out.shapes);
     assert!(
         find_rendered_text_pos(&out.shapes, &endpoint_id).is_some(),
@@ -841,9 +842,10 @@ fn test_gui_iroh_input_listen_and_output_rendering_and_key_generation() {
     app.output_states[0].iroh_direct_addrs = "127.0.0.1:11204".to_string();
     app.output_states[0].iroh_no_relay = true;
 
-    let out = ctx.run_ui(make_input_with_events(vec![]), |ui| {
+    let mut out = ctx.run_ui(make_input_with_events(vec![]), |ui| {
         app.render(ui);
     });
+    out.textures_delta.clear();
     assert_all_rendered_text_is_ascii(&out.shapes);
 
     let config = states_to_config(

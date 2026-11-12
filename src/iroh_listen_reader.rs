@@ -10,6 +10,7 @@ use iroh::endpoint::{Connection, PortmapperConfig, RecvStream, SendStream, prese
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey};
 use log::{error, info, warn};
 use std::io::{Error, ErrorKind};
+use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, channel};
 use tokio::task::JoinHandle;
 
@@ -17,6 +18,7 @@ use tokio::task::JoinHandle;
 pub const DEFAULT_IROH_ALPN: &[u8] = b"datapipe/iroh/1";
 
 const IROH_LISTEN_READ_BUFFER_SIZE: usize = 2048;
+const IROH_LISTEN_CHANNEL_CAPACITY: usize = 1024;
 
 /// Configuration parameters for constructing an [`IrohListenReader`].
 ///
@@ -75,6 +77,61 @@ impl Default for IrohListenConfig {
     }
 }
 
+/// Accepts an incoming bi-directional or uni-directional stream from `conn`.
+///
+/// If one stream direction fails because the peer used the other stream type and already closed
+/// the connection, this function falls back to checking the other stream queue before returning
+/// an error.
+pub(crate) async fn accept_incoming_stream(
+    conn: &Connection,
+) -> Result<(RecvStream, Option<SendStream>), Error> {
+    tokio::select! {
+        biased;
+        bi_res = conn.accept_bi() => {
+            match bi_res {
+                Ok((send_stream, recv_stream)) => {
+                    info!("IrohListenReader accepted bi-directional stream");
+                    Ok((recv_stream, Some(send_stream)))
+                }
+                Err(bi_err) => {
+                    match conn.accept_uni().await {
+                        Ok(recv_stream) => {
+                            info!("IrohListenReader accepted uni-directional stream");
+                            Ok((recv_stream, None))
+                        }
+                        Err(_) => {
+                            let msg = format!("Error accepting Iroh bi-directional stream: {bi_err}");
+                            error!("{msg}");
+                            Err(Error::new(ErrorKind::ConnectionAborted, msg))
+                        }
+                    }
+                }
+            }
+        }
+        uni_res = conn.accept_uni() => {
+            match uni_res {
+                Ok(recv_stream) => {
+                    info!("IrohListenReader accepted uni-directional stream");
+                    Ok((recv_stream, None))
+                }
+                Err(uni_err) => {
+                    match conn.accept_bi().await {
+                        Ok((send_stream, recv_stream)) => {
+                            info!("IrohListenReader accepted bi-directional stream");
+                            Ok((recv_stream, Some(send_stream)))
+                        }
+                        Err(_) => {
+                            let msg = format!("Error accepting Iroh uni-directional stream: {uni_err}");
+                            error!("{msg}");
+                            Err(Error::new(ErrorKind::ConnectionAborted, msg))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Listener-mode Iroh input reader that binds a local [`Endpoint`], accepts an incoming
 /// peer connection, and streams incoming bytes into the `datapipe` pipeline.
 ///
@@ -92,11 +149,8 @@ impl Default for IrohListenConfig {
 /// ```
 pub struct IrohListenReader {
     endpoint: Endpoint,
-    conn_rx: Receiver<Result<Connection, Error>>,
+    data_rx: Receiver<Result<Bytes, Error>>,
     accept_task: JoinHandle<()>,
-    connection: Option<Connection>,
-    recv_stream: Option<RecvStream>,
-    ack_send_stream: Option<SendStream>,
     stream_finished: bool,
 }
 
@@ -104,8 +158,6 @@ impl std::fmt::Debug for IrohListenReader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IrohListenReader")
             .field("endpoint_id", &self.endpoint.id())
-            .field("has_connection", &self.connection.is_some())
-            .field("has_recv_stream", &self.recv_stream.is_some())
             .field("stream_finished", &self.stream_finished)
             .finish()
     }
@@ -187,11 +239,12 @@ impl IrohListenReader {
             local_addrs
         );
 
-        let (conn_tx, conn_rx) = channel(1);
+        let (data_tx, data_rx) = channel(IROH_LISTEN_CHANNEL_CAPACITY);
         let accept_endpoint = endpoint.clone();
         let allowed_peer = config.allowed_peer;
 
         let accept_task = tokio::spawn(async move {
+            let mut accepted_conn: Option<Connection> = None;
             while let Some(incoming) = accept_endpoint.accept().await {
                 let accepting = match incoming.accept() {
                     Ok(accepting) => accepting,
@@ -215,29 +268,78 @@ impl IrohListenReader {
                             continue;
                         }
                         info!("IrohListenReader accepted connection from peer {remote_id}");
-                        let _ = conn_tx.send(Ok(conn)).await;
-                        return;
+                        accepted_conn = Some(conn);
+                        break;
                     }
                     Err(err) => {
                         warn!("IrohListenReader handshake failed: {err}");
                     }
                 }
             }
-            let _ = conn_tx
-                .send(Err(Error::new(
-                    ErrorKind::ConnectionAborted,
-                    "Iroh endpoint closed before accepting a connection",
-                )))
-                .await;
+
+            let Some(conn) = accepted_conn else {
+                let _ = data_tx
+                    .send(Err(Error::new(
+                        ErrorKind::ConnectionAborted,
+                        "Iroh endpoint closed before accepting a connection",
+                    )))
+                    .await;
+                return;
+            };
+
+            let (mut recv_stream, mut ack_send_stream) = match accept_incoming_stream(&conn).await {
+                Ok(streams) => streams,
+                Err(err) => {
+                    let _ = data_tx.send(Err(err)).await;
+                    return;
+                }
+            };
+
+            let mut buf = [0u8; IROH_LISTEN_READ_BUFFER_SIZE];
+            loop {
+                match recv_stream.read(&mut buf).await {
+                    Ok(Some(length)) => {
+                        if length == 0 {
+                            continue;
+                        }
+                        info!("IrohListenReader received {length} bytes");
+                        if data_tx
+                            .send(Ok(Bytes::copy_from_slice(&buf[..length])))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        info!("IrohListenReader reached end of stream");
+                        if let Some(mut ack_send) = ack_send_stream.take() {
+                            let _ = ack_send.finish();
+                            let _ = data_tx.send(Ok(Bytes::new())).await;
+                            let _ =
+                                tokio::time::timeout(Duration::from_secs(2), ack_send.stopped())
+                                    .await;
+                        } else {
+                            let _ = data_tx.send(Ok(Bytes::new())).await;
+                        }
+                        break;
+                    }
+                    Err(err) => {
+                        let msg = format!("IrohListenReader read error: {err}");
+                        error!("{msg}");
+                        let _ = data_tx
+                            .send(Err(Error::new(ErrorKind::BrokenPipe, msg)))
+                            .await;
+                        break;
+                    }
+                }
+            }
         });
 
         Ok(Self {
             endpoint,
-            conn_rx,
+            data_rx,
             accept_task,
-            connection: None,
-            recv_stream: None,
-            ack_send_stream: None,
             stream_finished: false,
         })
     }
@@ -282,89 +384,17 @@ impl InputReader for IrohListenReader {
             return Ok(Bytes::new());
         }
 
-        if self.connection.is_none() {
-            info!(
-                "IrohListenReader ({}) waiting for incoming peer connection",
-                self.endpoint.id()
-            );
-            match self.conn_rx.recv().await {
-                Some(Ok(conn)) => {
-                    self.connection = Some(conn);
+        match self.data_rx.recv().await {
+            Some(Ok(bytes)) => {
+                if bytes.is_empty() {
+                    self.stream_finished = true;
                 }
-                Some(Err(err)) => return Err(err),
-                None => {
-                    return Err(Error::new(
-                        ErrorKind::ConnectionAborted,
-                        "Iroh listener accept channel closed unexpectedly",
-                    ));
-                }
+                Ok(bytes)
             }
-        }
-
-        if self.recv_stream.is_none() {
-            let Some(ref conn) = self.connection else {
-                return Err(Error::new(
-                    ErrorKind::NotConnected,
-                    "Iroh connection not established",
-                ));
-            };
-
-            tokio::select! {
-                bi_res = conn.accept_bi() => {
-                    match bi_res {
-                        Ok((send_stream, recv_stream)) => {
-                            info!("IrohListenReader accepted bi-directional stream");
-                            self.ack_send_stream = Some(send_stream);
-                            self.recv_stream = Some(recv_stream);
-                        }
-                        Err(err) => {
-                            let msg = format!("Error accepting Iroh bi-directional stream: {err}");
-                            error!("{msg}");
-                            return Err(Error::new(ErrorKind::ConnectionAborted, msg));
-                        }
-                    }
-                }
-                uni_res = conn.accept_uni() => {
-                    match uni_res {
-                        Ok(recv_stream) => {
-                            info!("IrohListenReader accepted uni-directional stream");
-                            self.recv_stream = Some(recv_stream);
-                        }
-                        Err(err) => {
-                            let msg = format!("Error accepting Iroh uni-directional stream: {err}");
-                            error!("{msg}");
-                            return Err(Error::new(ErrorKind::ConnectionAborted, msg));
-                        }
-                    }
-                }
-            }
-        }
-
-        let Some(ref mut recv_stream) = self.recv_stream else {
-            return Err(Error::new(
-                ErrorKind::NotConnected,
-                "Iroh receive stream not available",
-            ));
-        };
-
-        let mut buf = [0u8; IROH_LISTEN_READ_BUFFER_SIZE];
-        match recv_stream.read(&mut buf).await {
-            Ok(Some(length)) => {
-                info!("IrohListenReader received {length} bytes");
-                Ok(Bytes::copy_from_slice(&buf[..length]))
-            }
-            Ok(None) => {
-                info!("IrohListenReader reached end of stream");
+            Some(Err(err)) => Err(err),
+            None => {
                 self.stream_finished = true;
-                if let Some(mut ack_send) = self.ack_send_stream.take() {
-                    let _ = ack_send.finish();
-                }
                 Ok(Bytes::new())
-            }
-            Err(err) => {
-                let msg = format!("IrohListenReader read error: {err}");
-                error!("{msg}");
-                Err(Error::new(ErrorKind::BrokenPipe, msg))
             }
         }
     }

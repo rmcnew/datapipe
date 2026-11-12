@@ -309,6 +309,7 @@ pub struct IrohReader {
     endpoint: Endpoint,
     connection: Connection,
     recv_stream: Option<RecvStream>,
+    ack_send_stream: Option<SendStream>,
     bi_candidate: Option<RecvStream>,
     stream_finished: bool,
 }
@@ -333,7 +334,7 @@ impl IrohReader {
         let (endpoint, connection) = establish_iroh_connection(&config).await?;
 
         // Open a bi-directional stream and finish our send half so peers using `accept_bi()`
-        // are notified immediately, while also allowing peers that initiate via `open_uni()`.
+        // are notified immediately, while also allowing peers that initiate via `open_bi()` or `open_uni()`.
         let bi_candidate = match connection.open_bi().await {
             Ok((mut send_stream, recv_stream)) => {
                 let _ = send_stream.finish();
@@ -346,6 +347,7 @@ impl IrohReader {
             endpoint,
             connection,
             recv_stream: None,
+            ack_send_stream: None,
             bi_candidate,
             stream_finished: false,
         })
@@ -375,6 +377,9 @@ impl InputReader for IrohReader {
                 Ok(None) => {
                     info!("IrohReader reached end of stream");
                     self.stream_finished = true;
+                    if let Some(mut ack_send) = self.ack_send_stream.take() {
+                        let _ = ack_send.finish();
+                    }
                     Ok(Bytes::new())
                 }
                 Err(err) => {
@@ -385,71 +390,118 @@ impl InputReader for IrohReader {
             };
         }
 
-        // First read: accept whichever stream the remote peer sends data on first.
-        if let Some(mut bi_recv) = self.bi_candidate.take() {
+        // First read: accept whichever stream the remote peer sends data on first,
+        // without failing if an unused stream candidate closes.
+        let mut bi_candidate = self.bi_candidate.take();
+        let mut accept_bi_enabled = true;
+        let mut accept_uni_enabled = true;
+        let mut saw_clean_eof = false;
+        let mut last_err: Option<Error> = None;
+
+        while bi_candidate.is_some() || accept_bi_enabled || accept_uni_enabled {
             tokio::select! {
-                bi_res = bi_recv.read(&mut buf) => {
+                biased;
+                bi_res = async {
+                    match bi_candidate.as_mut() {
+                        Some(stream) => stream.read(&mut buf).await,
+                        None => std::future::pending().await,
+                    }
+                }, if bi_candidate.is_some() => {
                     match bi_res {
                         Ok(Some(length)) => {
-                            self.recv_stream = Some(bi_recv);
-                            Ok(Bytes::copy_from_slice(&buf[..length]))
+                            self.recv_stream = bi_candidate;
+                            return Ok(Bytes::copy_from_slice(&buf[..length]));
                         }
                         Ok(None) => {
-                            self.stream_finished = true;
-                            Ok(Bytes::new())
+                            saw_clean_eof = true;
+                            bi_candidate = None;
                         }
                         Err(err) => {
-                            let msg = format!("IrohReader bi-stream read error: {err}");
-                            error!("{msg}");
-                            Err(Error::new(ErrorKind::BrokenPipe, msg))
+                            last_err = Some(Error::new(
+                                ErrorKind::BrokenPipe,
+                                format!("IrohReader bi-stream read error: {err}"),
+                            ));
+                            bi_candidate = None;
                         }
                     }
                 }
-                uni_res = self.connection.accept_uni() => {
-                    let mut uni_recv = uni_res.map_err(|err| {
-                        let msg = format!("IrohReader accept_uni error: {err}");
-                        error!("{msg}");
-                        Error::new(ErrorKind::ConnectionAborted, msg)
-                    })?;
-                    match uni_recv.read(&mut buf).await {
-                        Ok(Some(length)) => {
-                            self.recv_stream = Some(uni_recv);
-                            Ok(Bytes::copy_from_slice(&buf[..length]))
-                        }
-                        Ok(None) => {
-                            self.stream_finished = true;
-                            Ok(Bytes::new())
+                srv_bi_res = self.connection.accept_bi(), if accept_bi_enabled => {
+                    match srv_bi_res {
+                        Ok((send_stream, mut recv_stream)) => {
+                            match recv_stream.read(&mut buf).await {
+                                Ok(Some(length)) => {
+                                    self.ack_send_stream = Some(send_stream);
+                                    self.recv_stream = Some(recv_stream);
+                                    return Ok(Bytes::copy_from_slice(&buf[..length]));
+                                }
+                                Ok(None) => {
+                                    let mut send_stream = send_stream;
+                                    let _ = send_stream.finish();
+                                    self.stream_finished = true;
+                                    return Ok(Bytes::new());
+                                }
+                                Err(err) => {
+                                    last_err = Some(Error::new(
+                                        ErrorKind::BrokenPipe,
+                                        format!("IrohReader server bi-stream read error: {err}"),
+                                    ));
+                                    accept_bi_enabled = false;
+                                }
+                            }
                         }
                         Err(err) => {
-                            let msg = format!("IrohReader uni-stream read error: {err}");
-                            error!("{msg}");
-                            Err(Error::new(ErrorKind::BrokenPipe, msg))
+                            last_err = Some(Error::new(
+                                ErrorKind::ConnectionAborted,
+                                format!("IrohReader accept_bi error: {err}"),
+                            ));
+                            accept_bi_enabled = false;
                         }
                     }
                 }
-            }
-        } else {
-            let mut uni_recv = self.connection.accept_uni().await.map_err(|err| {
-                let msg = format!("IrohReader accept_uni error: {err}");
-                error!("{msg}");
-                Error::new(ErrorKind::ConnectionAborted, msg)
-            })?;
-            match uni_recv.read(&mut buf).await {
-                Ok(Some(length)) => {
-                    self.recv_stream = Some(uni_recv);
-                    Ok(Bytes::copy_from_slice(&buf[..length]))
-                }
-                Ok(None) => {
-                    self.stream_finished = true;
-                    Ok(Bytes::new())
-                }
-                Err(err) => {
-                    let msg = format!("IrohReader uni-stream read error: {err}");
-                    error!("{msg}");
-                    Err(Error::new(ErrorKind::BrokenPipe, msg))
+                uni_res = self.connection.accept_uni(), if accept_uni_enabled => {
+                    match uni_res {
+                        Ok(mut uni_recv) => {
+                            match uni_recv.read(&mut buf).await {
+                                Ok(Some(length)) => {
+                                    self.recv_stream = Some(uni_recv);
+                                    return Ok(Bytes::copy_from_slice(&buf[..length]));
+                                }
+                                Ok(None) => {
+                                    self.stream_finished = true;
+                                    return Ok(Bytes::new());
+                                }
+                                Err(err) => {
+                                    last_err = Some(Error::new(
+                                        ErrorKind::BrokenPipe,
+                                        format!("IrohReader uni-stream read error: {err}"),
+                                    ));
+                                    accept_uni_enabled = false;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            last_err = Some(Error::new(
+                                ErrorKind::ConnectionAborted,
+                                format!("IrohReader accept_uni error: {err}"),
+                            ));
+                            accept_uni_enabled = false;
+                        }
+                    }
                 }
             }
         }
+
+        if saw_clean_eof {
+            self.stream_finished = true;
+            return Ok(Bytes::new());
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            Error::new(
+                ErrorKind::ConnectionAborted,
+                "IrohReader connection closed without receiving a stream",
+            )
+        }))
     }
 }
 
@@ -528,14 +580,11 @@ impl OutputWriter for IrohWriter {
             warn!("IrohWriter finish stream warning: {err}");
         }
 
+        // Wait for the remote peer to finish its half of the bidirectional stream (or reset/close)
+        // after reading all bytes, ensuring we never send `CONNECTION_CLOSE` before the peer
+        // application has accepted and drained the stream.
         if let Some(mut ack_recv) = self.ack_recv_stream.take() {
-            let wait_ack = async {
-                tokio::select! {
-                    _ = ack_recv.read_to_end(16) => {}
-                    _ = self.send_stream.stopped() => {}
-                }
-            };
-            let _ = tokio::time::timeout(Duration::from_secs(5), wait_ack).await;
+            let _ = tokio::time::timeout(Duration::from_secs(10), ack_recv.read_to_end(16)).await;
         } else {
             let _ = tokio::time::timeout(Duration::from_secs(5), self.send_stream.stopped()).await;
         }
@@ -583,6 +632,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_iroh_invalid_empty_alpn() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let listen_cfg = IrohListenConfig {
+            alpn: Vec::new(),
+            no_relay: true,
+            ..Default::default()
+        };
+        assert!(IrohListenReader::new(listen_cfg).await.is_err());
+
+        let mut connect_cfg = IrohConnectConfig::new(SecretKey::generate().public());
+        connect_cfg.alpn = Vec::new();
+        connect_cfg.no_relay = true;
+        assert!(IrohWriter::new(connect_cfg.clone()).await.is_err());
+        assert!(IrohReader::new(connect_cfg).await.is_err());
+    }
+
+    #[tokio::test]
     async fn test_iroh_listen_and_writer_loopback() -> Result<(), Error> {
         let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -622,6 +689,157 @@ mod tests {
         }
 
         assert_eq!(received, payload);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_iroh_listen_and_writer_concurrent_multi_chunk() -> Result<(), Error> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let listener_key = SecretKey::generate();
+        let listener_id = listener_key.public();
+
+        let listen_cfg = IrohListenConfig {
+            secret_key: Some(listener_key),
+            bind_addr: Some("127.0.0.1:0".parse().map_err(Error::other)?),
+            alpn: DEFAULT_IROH_ALPN.to_vec(),
+            relay_url: None,
+            no_relay: true,
+            allowed_peer: None,
+        };
+
+        let mut reader = IrohListenReader::new(listen_cfg).await?;
+        let listen_addrs = reader.local_addrs();
+
+        let reader_handle = tokio::spawn(async move {
+            let mut total = Vec::new();
+            loop {
+                let chunk = reader.read().await?;
+                if chunk.is_empty() {
+                    break;
+                }
+                total.extend_from_slice(&chunk);
+            }
+            Ok::<Vec<u8>, Error>(total)
+        });
+
+        let mut connect_cfg = IrohConnectConfig::new(listener_id);
+        connect_cfg.target_addrs = listen_addrs;
+        connect_cfg.no_relay = true;
+
+        let mut writer = IrohWriter::new(connect_cfg).await?;
+        let mut expected = Vec::new();
+        for idx in 0..32u32 {
+            let block = format!("chunk-{idx:04}-payload-data\n").repeat(32);
+            writer.write(block.as_bytes()).await?;
+            expected.extend_from_slice(block.as_bytes());
+        }
+        writer.close().await?;
+
+        let received = reader_handle.await.map_err(Error::other)??;
+        assert_eq!(received.len(), expected.len());
+        assert_eq!(received, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_iroh_listen_allowed_peer_filter() -> Result<(), Error> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let listener_key = SecretKey::generate();
+        let listener_id = listener_key.public();
+
+        let authorized_client_key = SecretKey::generate();
+        let authorized_client_id = authorized_client_key.public();
+
+        let listen_cfg = IrohListenConfig {
+            secret_key: Some(listener_key),
+            bind_addr: Some("127.0.0.1:0".parse().map_err(Error::other)?),
+            alpn: DEFAULT_IROH_ALPN.to_vec(),
+            relay_url: None,
+            no_relay: true,
+            allowed_peer: Some(authorized_client_id),
+        };
+
+        let mut reader = IrohListenReader::new(listen_cfg).await?;
+        let listen_addrs = reader.local_addrs();
+
+        // Connect with the authorized peer key and verify transfer succeeds.
+        let mut auth_cfg = IrohConnectConfig::new(listener_id);
+        auth_cfg.target_addrs = listen_addrs;
+        auth_cfg.no_relay = true;
+        auth_cfg.secret_key = Some(authorized_client_key);
+
+        let mut writer = IrohWriter::new(auth_cfg).await?;
+        let expected = b"authorized peer payload";
+        writer.write(expected).await?;
+        writer.close().await?;
+
+        let mut received = Vec::new();
+        loop {
+            let chunk = reader.read().await?;
+            if chunk.is_empty() {
+                break;
+            }
+            received.extend_from_slice(&chunk);
+        }
+        assert_eq!(received, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_iroh_reader_outbound_pull() -> Result<(), Error> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let server_key = SecretKey::generate();
+        let server_id = server_key.public();
+        let bind_addr: SocketAddr = "127.0.0.1:0".parse().map_err(Error::other)?;
+
+        let server_endpoint = Endpoint::builder(presets::Minimal)
+            .portmapper_config(PortmapperConfig::Disabled)
+            .secret_key(server_key)
+            .clear_ip_transports()
+            .bind_addr(bind_addr)
+            .map_err(Error::other)?
+            .alpns(vec![DEFAULT_IROH_ALPN.to_vec()])
+            .bind()
+            .await
+            .map_err(Error::other)?;
+
+        let server_addrs: Vec<SocketAddr> = server_endpoint.addr().ip_addrs().copied().collect();
+        let expected_payload = b"outbound pull payload from iroh server";
+
+        let server_task = tokio::spawn(async move {
+            if let Some(incoming) = server_endpoint.accept().await
+                && let Ok(accepting) = incoming.accept()
+                && let Ok(conn) = accepting.await
+                && let Ok((mut send_stream, mut recv_stream)) = conn.accept_bi().await
+            {
+                let _ = recv_stream.read_to_end(16).await;
+                let _ = send_stream.write_all(expected_payload).await;
+                let _ = send_stream.finish();
+                let _ = tokio::time::timeout(Duration::from_secs(2), send_stream.stopped()).await;
+                conn.close(0u32.into(), b"done");
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(2), server_endpoint.close()).await;
+        });
+
+        let mut connect_cfg = IrohConnectConfig::new(server_id);
+        connect_cfg.target_addrs = server_addrs;
+        connect_cfg.no_relay = true;
+
+        let mut reader = IrohReader::new(connect_cfg).await?;
+        let mut received = Vec::new();
+        loop {
+            let chunk = reader.read().await?;
+            if chunk.is_empty() {
+                break;
+            }
+            received.extend_from_slice(&chunk);
+        }
+
+        let _ = server_task.await;
+        assert_eq!(received, expected_payload);
         Ok(())
     }
 }
