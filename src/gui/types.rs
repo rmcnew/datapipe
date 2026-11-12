@@ -2,6 +2,10 @@
 
 use crate::config::{DatapipeConfig, OutputDestinationConfig};
 use crate::datapipe_types::EncryptionKey;
+use crate::iroh_reader_writer::{
+    format_iroh_secret_key_hex, parse_iroh_endpoint_id, parse_iroh_relay_url,
+    parse_iroh_secret_key, parse_iroh_socket_addrs,
+};
 use std::path::PathBuf;
 
 /// The active tab in the GUI.
@@ -58,6 +62,10 @@ pub enum InputType {
     Udp,
     /// Join and listen on UDP multicast group
     UdpMulticast,
+    /// Connect outbound to a remote Iroh peer by EndpointId
+    Iroh,
+    /// Listen on a local Iroh endpoint for an inbound peer connection
+    IrohListen,
 }
 
 impl InputType {
@@ -75,6 +83,8 @@ impl InputType {
             Self::TlsListen,
             Self::Udp,
             Self::UdpMulticast,
+            Self::Iroh,
+            Self::IrohListen,
         ]
     }
 
@@ -92,6 +102,8 @@ impl InputType {
             Self::TlsListen => "TLS Listen",
             Self::Udp => "UDP",
             Self::UdpMulticast => "UDP Multicast",
+            Self::Iroh => "Iroh",
+            Self::IrohListen => "Iroh Listen",
         }
     }
 }
@@ -149,6 +161,30 @@ pub struct InputState {
     pub udp_address: String,
     /// UDP multicast bind address
     pub udp_multicast_address: String,
+    /// Target remote Iroh EndpointId for outbound connection
+    pub iroh_peer_id: String,
+    /// Optional comma-separated direct IP socket addresses (`ip:port`) for Iroh input
+    pub iroh_direct_addrs: String,
+    /// Optional custom relay server URL for Iroh input
+    pub iroh_relay_url: String,
+    /// ALPN protocol identifier for Iroh input
+    pub iroh_alpn: String,
+    /// Optional local 32-byte Ed25519 secret key (64-char hex) for Iroh input
+    pub iroh_secret_key: String,
+    /// Disable relay servers for Iroh input (direct IP transport only)
+    pub iroh_no_relay: bool,
+    /// Optional local UDP bind address (`ip:port`) for Iroh listen input
+    pub iroh_listen_bind_addr: String,
+    /// Optional local 32-byte Ed25519 secret key (64-char hex) for Iroh listen input
+    pub iroh_listen_secret_key: String,
+    /// ALPN protocol identifier for Iroh listen input
+    pub iroh_listen_alpn: String,
+    /// Optional custom relay server URL for Iroh listen input
+    pub iroh_listen_relay_url: String,
+    /// Optional remote peer EndpointId filter for Iroh listen input
+    pub iroh_listen_allowed_peer: String,
+    /// Disable relay servers for Iroh listen input (direct IP transport only)
+    pub iroh_listen_no_relay: bool,
 }
 
 impl Default for InputState {
@@ -179,11 +215,45 @@ impl Default for InputState {
             tls_listen_generate_self_signed: true,
             udp_address: "127.0.0.1:9000".to_string(),
             udp_multicast_address: "224.0.0.1:9000".to_string(),
+            iroh_peer_id: String::new(),
+            iroh_direct_addrs: String::new(),
+            iroh_relay_url: String::new(),
+            iroh_alpn: "datapipe/iroh/1".to_string(),
+            iroh_secret_key: String::new(),
+            iroh_no_relay: false,
+            iroh_listen_bind_addr: String::new(),
+            iroh_listen_secret_key: String::new(),
+            iroh_listen_alpn: "datapipe/iroh/1".to_string(),
+            iroh_listen_relay_url: String::new(),
+            iroh_listen_allowed_peer: String::new(),
+            iroh_listen_no_relay: false,
         }
     }
 }
 
 impl InputState {
+    /// Generates a fresh random 32-byte Iroh secret key (64-character hex) for `Iroh Listen`.
+    pub fn generate_iroh_listen_key(&mut self) {
+        let key = iroh::SecretKey::generate();
+        self.iroh_listen_secret_key = format_iroh_secret_key_hex(&key);
+    }
+
+    /// Generates a fresh random 32-byte Iroh secret key (64-character hex) for outbound `Iroh` input.
+    pub fn generate_iroh_input_key(&mut self) {
+        let key = iroh::SecretKey::generate();
+        self.iroh_secret_key = format_iroh_secret_key_hex(&key);
+    }
+
+    /// Returns the derived 64-character hex `EndpointId` when `iroh_listen_secret_key` is valid.
+    #[must_use]
+    pub fn iroh_listen_derived_endpoint_id(&self) -> Option<String> {
+        if self.iroh_listen_secret_key.trim().is_empty() {
+            return None;
+        }
+        parse_iroh_secret_key(self.iroh_listen_secret_key.trim())
+            .ok()
+            .map(|k| k.public().to_string())
+    }
     /// Validates the input state and returns any validation errors.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
@@ -261,6 +331,62 @@ impl InputState {
             InputType::UdpMulticast => {
                 if self.udp_multicast_address.trim().is_empty() {
                     errors.push("Input: UDP multicast address is required.".to_string());
+                }
+            }
+            InputType::Iroh => {
+                if self.iroh_peer_id.trim().is_empty() {
+                    errors.push("Input: Remote Iroh EndpointId is required.".to_string());
+                } else if let Err(err) = parse_iroh_endpoint_id(self.iroh_peer_id.trim()) {
+                    errors.push(format!("Input: {err}"));
+                }
+                if !self.iroh_direct_addrs.trim().is_empty()
+                    && let Err(err) = parse_iroh_socket_addrs(self.iroh_direct_addrs.trim())
+                {
+                    errors.push(format!("Input: {err}"));
+                }
+                if !self.iroh_relay_url.trim().is_empty()
+                    && let Err(err) = parse_iroh_relay_url(self.iroh_relay_url.trim())
+                {
+                    errors.push(format!("Input: {err}"));
+                }
+                if !self.iroh_secret_key.trim().is_empty()
+                    && let Err(err) = parse_iroh_secret_key(self.iroh_secret_key.trim())
+                {
+                    errors.push(format!("Input: {err}"));
+                }
+                if self.iroh_alpn.trim().is_empty() {
+                    errors.push("Input: Iroh ALPN cannot be empty.".to_string());
+                }
+            }
+            InputType::IrohListen => {
+                if !self.iroh_listen_bind_addr.trim().is_empty()
+                    && let Err(err) = self
+                        .iroh_listen_bind_addr
+                        .trim()
+                        .parse::<std::net::SocketAddr>()
+                {
+                    errors.push(format!(
+                        "Input: Invalid Iroh listen bind address '{}': {err}",
+                        self.iroh_listen_bind_addr.trim()
+                    ));
+                }
+                if !self.iroh_listen_secret_key.trim().is_empty()
+                    && let Err(err) = parse_iroh_secret_key(self.iroh_listen_secret_key.trim())
+                {
+                    errors.push(format!("Input: {err}"));
+                }
+                if !self.iroh_listen_relay_url.trim().is_empty()
+                    && let Err(err) = parse_iroh_relay_url(self.iroh_listen_relay_url.trim())
+                {
+                    errors.push(format!("Input: {err}"));
+                }
+                if !self.iroh_listen_allowed_peer.trim().is_empty()
+                    && let Err(err) = parse_iroh_endpoint_id(self.iroh_listen_allowed_peer.trim())
+                {
+                    errors.push(format!("Input: {err}"));
+                }
+                if self.iroh_listen_alpn.trim().is_empty() {
+                    errors.push("Input: Iroh listen ALPN cannot be empty.".to_string());
                 }
             }
         }
@@ -369,6 +495,8 @@ pub enum OutputType {
     Https,
     /// Send over TLS socket
     Tls,
+    /// Send over Iroh QUIC stream to remote peer EndpointId
+    Iroh,
 }
 
 impl OutputType {
@@ -383,6 +511,7 @@ impl OutputType {
             Self::Http,
             Self::Https,
             Self::Tls,
+            Self::Iroh,
         ]
     }
 
@@ -397,6 +526,7 @@ impl OutputType {
             Self::Http => "HTTP",
             Self::Https => "HTTPS",
             Self::Tls => "TLS",
+            Self::Iroh => "Iroh",
         }
     }
 }
@@ -448,6 +578,18 @@ pub struct OutputState {
     pub tls_root_ca: String,
     /// TLS skip server verification
     pub tls_skip_server_verify: bool,
+    /// Target remote Iroh EndpointId for output
+    pub iroh_peer_id: String,
+    /// Optional comma-separated direct IP socket addresses (`ip:port`) for Iroh output
+    pub iroh_direct_addrs: String,
+    /// Optional custom relay server URL for Iroh output
+    pub iroh_relay_url: String,
+    /// ALPN protocol identifier for Iroh output
+    pub iroh_alpn: String,
+    /// Optional local 32-byte Ed25519 secret key (64-char hex) for Iroh output
+    pub iroh_secret_key: String,
+    /// Disable relay servers for Iroh output (direct IP transport only)
+    pub iroh_no_relay: bool,
 }
 
 impl Default for OutputState {
@@ -475,11 +617,22 @@ impl Default for OutputState {
             tls_client_key: String::new(),
             tls_root_ca: String::new(),
             tls_skip_server_verify: false,
+            iroh_peer_id: String::new(),
+            iroh_direct_addrs: String::new(),
+            iroh_relay_url: String::new(),
+            iroh_alpn: "datapipe/iroh/1".to_string(),
+            iroh_secret_key: String::new(),
+            iroh_no_relay: false,
         }
     }
 }
 
 impl OutputState {
+    /// Generates a fresh random 32-byte Iroh secret key (64-character hex) for this output sink.
+    pub fn generate_iroh_key(&mut self) {
+        let key = iroh::SecretKey::generate();
+        self.iroh_secret_key = format_iroh_secret_key_hex(&key);
+    }
     /// Validates this output destination and returns any validation errors.
     pub fn validate(&self, index: usize) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
@@ -534,6 +687,31 @@ impl OutputState {
                 let has_key = !self.tls_client_key.trim().is_empty();
                 if has_cert != has_key {
                     errors.push(format!("{prefix}TLS client certificate chain and client key must be provided together."));
+                }
+            }
+            OutputType::Iroh => {
+                if self.iroh_peer_id.trim().is_empty() {
+                    errors.push(format!("{prefix}Remote Iroh EndpointId is required."));
+                } else if let Err(err) = parse_iroh_endpoint_id(self.iroh_peer_id.trim()) {
+                    errors.push(format!("{prefix}{err}"));
+                }
+                if !self.iroh_direct_addrs.trim().is_empty()
+                    && let Err(err) = parse_iroh_socket_addrs(self.iroh_direct_addrs.trim())
+                {
+                    errors.push(format!("{prefix}{err}"));
+                }
+                if !self.iroh_relay_url.trim().is_empty()
+                    && let Err(err) = parse_iroh_relay_url(self.iroh_relay_url.trim())
+                {
+                    errors.push(format!("{prefix}{err}"));
+                }
+                if !self.iroh_secret_key.trim().is_empty()
+                    && let Err(err) = parse_iroh_secret_key(self.iroh_secret_key.trim())
+                {
+                    errors.push(format!("{prefix}{err}"));
+                }
+                if self.iroh_alpn.trim().is_empty() {
+                    errors.push(format!("{prefix}Iroh ALPN cannot be empty."));
                 }
             }
         }
@@ -755,6 +933,51 @@ pub fn states_to_config(
         InputType::UdpMulticast => {
             config.input.udp_multicast_input = Some(input.udp_multicast_address.trim().to_string());
         }
+        InputType::Iroh => {
+            config.input.iroh_input = Some(input.iroh_peer_id.trim().to_string());
+            if !input.iroh_direct_addrs.trim().is_empty() {
+                config.iroh_input.iroh_input_addrs =
+                    Some(input.iroh_direct_addrs.trim().to_string());
+            }
+            if !input.iroh_relay_url.trim().is_empty() {
+                config.iroh_input.iroh_input_relay_url =
+                    Some(input.iroh_relay_url.trim().to_string());
+            }
+            if !input.iroh_alpn.trim().is_empty() && input.iroh_alpn.trim() != "datapipe/iroh/1" {
+                config.iroh_input.iroh_input_alpn = Some(input.iroh_alpn.trim().to_string());
+            }
+            if !input.iroh_secret_key.trim().is_empty() {
+                config.iroh_input.iroh_input_secret_key =
+                    Some(input.iroh_secret_key.trim().to_string());
+            }
+            config.iroh_input.iroh_input_no_relay = input.iroh_no_relay;
+        }
+        InputType::IrohListen => {
+            config.input.iroh_listen_input = true;
+            if !input.iroh_listen_bind_addr.trim().is_empty() {
+                config.iroh_listen_input.iroh_listen_input_bind_addr =
+                    Some(input.iroh_listen_bind_addr.trim().to_string());
+            }
+            if !input.iroh_listen_secret_key.trim().is_empty() {
+                config.iroh_listen_input.iroh_listen_input_secret_key =
+                    Some(input.iroh_listen_secret_key.trim().to_string());
+            }
+            if !input.iroh_listen_alpn.trim().is_empty()
+                && input.iroh_listen_alpn.trim() != "datapipe/iroh/1"
+            {
+                config.iroh_listen_input.iroh_listen_input_alpn =
+                    Some(input.iroh_listen_alpn.trim().to_string());
+            }
+            if !input.iroh_listen_relay_url.trim().is_empty() {
+                config.iroh_listen_input.iroh_listen_input_relay_url =
+                    Some(input.iroh_listen_relay_url.trim().to_string());
+            }
+            if !input.iroh_listen_allowed_peer.trim().is_empty() {
+                config.iroh_listen_input.iroh_listen_input_allowed_peer =
+                    Some(input.iroh_listen_allowed_peer.trim().to_string());
+            }
+            config.iroh_listen_input.iroh_listen_input_no_relay = input.iroh_listen_no_relay;
+        }
     }
 
     // Decrypt configuration
@@ -831,6 +1054,25 @@ pub fn states_to_config(
                 }
                 dest.tls_output.tls_output_skip_server_verify = out.tls_skip_server_verify;
             }
+            OutputType::Iroh => {
+                dest.output.iroh_output = Some(out.iroh_peer_id.trim().to_string());
+                if !out.iroh_direct_addrs.trim().is_empty() {
+                    dest.iroh_output.iroh_output_addrs =
+                        Some(out.iroh_direct_addrs.trim().to_string());
+                }
+                if !out.iroh_relay_url.trim().is_empty() {
+                    dest.iroh_output.iroh_output_relay_url =
+                        Some(out.iroh_relay_url.trim().to_string());
+                }
+                if !out.iroh_alpn.trim().is_empty() && out.iroh_alpn.trim() != "datapipe/iroh/1" {
+                    dest.iroh_output.iroh_output_alpn = Some(out.iroh_alpn.trim().to_string());
+                }
+                if !out.iroh_secret_key.trim().is_empty() {
+                    dest.iroh_output.iroh_output_secret_key =
+                        Some(out.iroh_secret_key.trim().to_string());
+                }
+                dest.iroh_output.iroh_output_no_relay = out.iroh_no_relay;
+            }
         }
         output_configs.push(dest);
     }
@@ -840,6 +1082,7 @@ pub fn states_to_config(
         config.http_output = first.http_output.clone();
         config.https_output = first.https_output.clone();
         config.tls_output = first.tls_output.clone();
+        config.iroh_output = first.iroh_output.clone();
     }
     config.outputs = Some(output_configs);
 
@@ -924,6 +1167,58 @@ pub fn load_config_into_states(
     } else if let Some(ref addr) = config.input.udp_multicast_input {
         input.input_type = InputType::UdpMulticast;
         input.udp_multicast_address = addr.clone();
+    } else if let Some(ref peer_id) = config.input.iroh_input {
+        input.input_type = InputType::Iroh;
+        input.iroh_peer_id = peer_id.clone();
+        input.iroh_direct_addrs = config
+            .iroh_input
+            .iroh_input_addrs
+            .clone()
+            .unwrap_or_default();
+        input.iroh_relay_url = config
+            .iroh_input
+            .iroh_input_relay_url
+            .clone()
+            .unwrap_or_default();
+        input.iroh_alpn = config
+            .iroh_input
+            .iroh_input_alpn
+            .clone()
+            .unwrap_or_else(|| "datapipe/iroh/1".to_string());
+        input.iroh_secret_key = config
+            .iroh_input
+            .iroh_input_secret_key
+            .clone()
+            .unwrap_or_default();
+        input.iroh_no_relay = config.iroh_input.iroh_input_no_relay;
+    } else if config.input.iroh_listen_input {
+        input.input_type = InputType::IrohListen;
+        input.iroh_listen_bind_addr = config
+            .iroh_listen_input
+            .iroh_listen_input_bind_addr
+            .clone()
+            .unwrap_or_default();
+        input.iroh_listen_secret_key = config
+            .iroh_listen_input
+            .iroh_listen_input_secret_key
+            .clone()
+            .unwrap_or_default();
+        input.iroh_listen_alpn = config
+            .iroh_listen_input
+            .iroh_listen_input_alpn
+            .clone()
+            .unwrap_or_else(|| "datapipe/iroh/1".to_string());
+        input.iroh_listen_relay_url = config
+            .iroh_listen_input
+            .iroh_listen_input_relay_url
+            .clone()
+            .unwrap_or_default();
+        input.iroh_listen_allowed_peer = config
+            .iroh_listen_input
+            .iroh_listen_input_allowed_peer
+            .clone()
+            .unwrap_or_default();
+        input.iroh_listen_no_relay = config.iroh_listen_input.iroh_listen_input_no_relay;
     }
 
     // Populate Decrypt
@@ -961,6 +1256,7 @@ pub fn load_config_into_states(
             http_output: config.http_output.clone(),
             https_output: config.https_output.clone(),
             tls_output: config.tls_output.clone(),
+            iroh_output: config.iroh_output.clone(),
         };
         populate_single_output(&dest, &mut state);
         outputs.push(state);
@@ -1021,6 +1317,30 @@ fn populate_single_output(dest: &OutputDestinationConfig, state: &mut OutputStat
             state.tls_root_ca = path.display().to_string();
         }
         state.tls_skip_server_verify = dest.tls_output.tls_output_skip_server_verify;
+    } else if let Some(ref peer_id) = dest.output.iroh_output {
+        state.output_type = OutputType::Iroh;
+        state.iroh_peer_id = peer_id.clone();
+        state.iroh_direct_addrs = dest
+            .iroh_output
+            .iroh_output_addrs
+            .clone()
+            .unwrap_or_default();
+        state.iroh_relay_url = dest
+            .iroh_output
+            .iroh_output_relay_url
+            .clone()
+            .unwrap_or_default();
+        state.iroh_alpn = dest
+            .iroh_output
+            .iroh_output_alpn
+            .clone()
+            .unwrap_or_else(|| "datapipe/iroh/1".to_string());
+        state.iroh_secret_key = dest
+            .iroh_output
+            .iroh_output_secret_key
+            .clone()
+            .unwrap_or_default();
+        state.iroh_no_relay = dest.iroh_output.iroh_output_no_relay;
     }
 }
 
@@ -1039,11 +1359,14 @@ mod tests {
 
     #[test]
     fn test_input_type_all() {
-        assert_eq!(InputType::all().len(), 10);
+        assert_eq!(InputType::all().len(), 12);
         assert_eq!(InputType::File.name(), "File");
         assert_eq!(InputType::Http.name(), "HTTP");
         assert_eq!(InputType::Https.name(), "HTTPS");
         assert_eq!(InputType::Stdin.name(), "STDIN");
+        assert_eq!(InputType::Iroh.name(), "Iroh");
+        assert_eq!(InputType::IrohListen.name(), "Iroh Listen");
+        assert_eq!(OutputType::Iroh.name(), "Iroh");
     }
 
     #[test]
@@ -1178,6 +1501,66 @@ mod tests {
         assert_eq!(loaded_outputs[0].file_path, "dest1.dat");
         assert_eq!(loaded_outputs[1].output_type, OutputType::Stdout);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_iroh_gui_validation_and_config_roundtrip() -> Result<(), String> {
+        let mut input = InputState {
+            input_type: InputType::IrohListen,
+            iroh_listen_bind_addr: "127.0.0.1:11204".to_string(),
+            iroh_listen_no_relay: true,
+            ..Default::default()
+        };
+        assert!(input.iroh_listen_derived_endpoint_id().is_none());
+        input.generate_iroh_listen_key();
+        let derived_id = input
+            .iroh_listen_derived_endpoint_id()
+            .ok_or_else(|| "Expected derived EndpointId".to_string())?;
+        assert_eq!(derived_id.len(), 64);
+
+        let decrypt = DecryptState::default();
+        let encrypt = EncryptState::default();
+
+        let mut out = OutputState {
+            output_type: OutputType::Iroh,
+            iroh_peer_id: derived_id.clone(),
+            iroh_direct_addrs: "127.0.0.1:11204".to_string(),
+            iroh_no_relay: true,
+            ..Default::default()
+        };
+        out.generate_iroh_key();
+
+        let outputs = vec![out.clone()];
+        let config = states_to_config(&input, &decrypt, &encrypt, &outputs)
+            .map_err(|errs| errs.join("; "))?;
+        config.validate().map_err(|e| e.to_string())?;
+
+        let mut loaded_input = InputState::default();
+        let mut loaded_decrypt = DecryptState::default();
+        let mut loaded_encrypt = EncryptState::default();
+        let mut loaded_outputs = Vec::new();
+        load_config_into_states(
+            &config,
+            &mut loaded_input,
+            &mut loaded_decrypt,
+            &mut loaded_encrypt,
+            &mut loaded_outputs,
+        );
+
+        assert_eq!(loaded_input.input_type, InputType::IrohListen);
+        assert_eq!(loaded_input.iroh_listen_bind_addr, "127.0.0.1:11204");
+        assert_eq!(
+            loaded_input.iroh_listen_secret_key,
+            input.iroh_listen_secret_key
+        );
+        assert!(loaded_input.iroh_listen_no_relay);
+        assert_eq!(loaded_outputs.len(), 1);
+        assert_eq!(loaded_outputs[0].output_type, OutputType::Iroh);
+        assert_eq!(loaded_outputs[0].iroh_peer_id, derived_id);
+        assert_eq!(loaded_outputs[0].iroh_direct_addrs, "127.0.0.1:11204");
+        assert_eq!(loaded_outputs[0].iroh_secret_key, out.iroh_secret_key);
+        assert!(loaded_outputs[0].iroh_no_relay);
         Ok(())
     }
 }

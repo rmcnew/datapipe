@@ -6,6 +6,11 @@ use crate::http_reader::HttpReader;
 use crate::http_writer::HttpWriter;
 use crate::https_reader::HttpsReader;
 use crate::https_writer::HttpsWriter;
+use crate::iroh_listen_reader::{DEFAULT_IROH_ALPN, IrohListenConfig, IrohListenReader};
+use crate::iroh_reader_writer::{
+    IrohConnectConfig, IrohReader, IrohWriter, parse_iroh_endpoint_id, parse_iroh_relay_url,
+    parse_iroh_secret_key, parse_iroh_socket_addrs,
+};
 use crate::parameters::Parameters;
 use crate::reader::Reader;
 use crate::stdin_reader::StdinReader;
@@ -74,6 +79,12 @@ pub struct InputArgs {
     /// read data from a UDP multicast address
     #[arg(long = "udp-multicast-input")]
     pub udp_multicast_input: Option<String>,
+    /// read data from an Iroh endpoint by EndpointId (64-character hex or z-base-32 public key)
+    #[arg(long = "iroh-input")]
+    pub iroh_input: Option<String>,
+    /// open a local Iroh endpoint to listen and receive data from a connecting peer
+    #[arg(long = "iroh-listen-input", default_value_t = false)]
+    pub iroh_listen_input: bool,
 }
 
 /// Additional parameters for HTTP input
@@ -155,6 +166,71 @@ pub struct TlsListenInputArgs {
     pub tls_listen_input_generate_self_signed: bool,
 }
 
+/// Additional parameters needed for Iroh outbound input (`--iroh-input`)
+///
+/// # Examples
+///
+/// ```
+/// use datapipe::args::IrohInputArgs;
+///
+/// let args = IrohInputArgs::default();
+/// assert!(args.is_empty());
+/// ```
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[group(required = false, multiple = true)]
+#[serde(default)]
+pub struct IrohInputArgs {
+    /// comma-separated direct IP socket addresses (`ip:port`) for the target Iroh endpoint
+    #[arg(long = "iroh-input-addrs")]
+    pub iroh_input_addrs: Option<String>,
+    /// custom relay server URL (`http://` or `https://`) for reaching the target Iroh endpoint
+    #[arg(long = "iroh-input-relay-url")]
+    pub iroh_input_relay_url: Option<String>,
+    /// custom ALPN protocol identifier (defaults to `datapipe/iroh/1`)
+    #[arg(long = "iroh-input-alpn")]
+    pub iroh_input_alpn: Option<String>,
+    /// local 32-byte Ed25519 secret key in 64-character hex (or z-base-32) format
+    #[arg(long = "iroh-input-secret-key")]
+    pub iroh_input_secret_key: Option<String>,
+    /// disable default relay servers (direct IP transport only)
+    #[arg(long = "iroh-input-no-relay", default_value_t = false)]
+    pub iroh_input_no_relay: bool,
+}
+
+/// Additional parameters needed for Iroh listen input (`--iroh-listen-input`)
+///
+/// # Examples
+///
+/// ```
+/// use datapipe::args::IrohListenInputArgs;
+///
+/// let args = IrohListenInputArgs::default();
+/// assert!(args.is_empty());
+/// ```
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[group(required = false, multiple = true)]
+#[serde(default)]
+pub struct IrohListenInputArgs {
+    /// optional local UDP bind address (`ip:port`) for the Iroh endpoint
+    #[arg(long = "iroh-listen-input-bind-addr")]
+    pub iroh_listen_input_bind_addr: Option<String>,
+    /// local 32-byte Ed25519 secret key in 64-character hex (or z-base-32) format for deterministic EndpointId
+    #[arg(long = "iroh-listen-input-secret-key")]
+    pub iroh_listen_input_secret_key: Option<String>,
+    /// custom ALPN protocol identifier (defaults to `datapipe/iroh/1`)
+    #[arg(long = "iroh-listen-input-alpn")]
+    pub iroh_listen_input_alpn: Option<String>,
+    /// custom relay server URL (`http://` or `https://`) for the listening Iroh endpoint
+    #[arg(long = "iroh-listen-input-relay-url")]
+    pub iroh_listen_input_relay_url: Option<String>,
+    /// optional remote peer EndpointId to restrict inbound connections to
+    #[arg(long = "iroh-listen-input-allowed-peer")]
+    pub iroh_listen_input_allowed_peer: Option<String>,
+    /// disable default relay servers (direct IP transport only)
+    #[arg(long = "iroh-listen-input-no-relay", default_value_t = false)]
+    pub iroh_listen_input_no_relay: bool,
+}
+
 /// Additional parameters for decrypting input
 #[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = false)]
@@ -204,6 +280,9 @@ pub struct OutputArgs {
     /// write data to UDP address
     #[arg(long = "udp-output")]
     pub udp_output: Option<String>,
+    /// write data to an Iroh endpoint by EndpointId (64-character hex or z-base-32 public key)
+    #[arg(long = "iroh-output")]
+    pub iroh_output: Option<String>,
 }
 
 /// Additional parameters needed for HTTP output
@@ -275,6 +354,37 @@ pub struct TlsOutputArgs {
     pub tls_output_skip_server_verify: bool,
 }
 
+/// Additional parameters needed for Iroh output (`--iroh-output`)
+///
+/// # Examples
+///
+/// ```
+/// use datapipe::args::IrohOutputArgs;
+///
+/// let args = IrohOutputArgs::default();
+/// assert!(args.is_empty());
+/// ```
+#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[group(required = false, multiple = true)]
+#[serde(default)]
+pub struct IrohOutputArgs {
+    /// comma-separated direct IP socket addresses (`ip:port`) for the target Iroh endpoint
+    #[arg(long = "iroh-output-addrs")]
+    pub iroh_output_addrs: Option<String>,
+    /// custom relay server URL (`http://` or `https://`) for reaching the target Iroh endpoint
+    #[arg(long = "iroh-output-relay-url")]
+    pub iroh_output_relay_url: Option<String>,
+    /// custom ALPN protocol identifier (defaults to `datapipe/iroh/1`)
+    #[arg(long = "iroh-output-alpn")]
+    pub iroh_output_alpn: Option<String>,
+    /// local 32-byte Ed25519 secret key in 64-character hex (or z-base-32) format
+    #[arg(long = "iroh-output-secret-key")]
+    pub iroh_output_secret_key: Option<String>,
+    /// disable default relay servers (direct IP transport only)
+    #[arg(long = "iroh-output-no-relay", default_value_t = false)]
+    pub iroh_output_no_relay: bool,
+}
+
 /// Logging parameters
 #[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
@@ -301,6 +411,31 @@ impl InputArgs {
             && self.tls_listen_input.is_none()
             && self.udp_input.is_none()
             && self.udp_multicast_input.is_none()
+            && self.iroh_input.is_none()
+            && !self.iroh_listen_input
+    }
+}
+
+impl IrohInputArgs {
+    /// Returns true if no Iroh input fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.iroh_input_addrs.is_none()
+            && self.iroh_input_relay_url.is_none()
+            && self.iroh_input_alpn.is_none()
+            && self.iroh_input_secret_key.is_none()
+            && !self.iroh_input_no_relay
+    }
+}
+
+impl IrohListenInputArgs {
+    /// Returns true if no Iroh listen input fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.iroh_listen_input_bind_addr.is_none()
+            && self.iroh_listen_input_secret_key.is_none()
+            && self.iroh_listen_input_alpn.is_none()
+            && self.iroh_listen_input_relay_url.is_none()
+            && self.iroh_listen_input_allowed_peer.is_none()
+            && !self.iroh_listen_input_no_relay
     }
 }
 
@@ -367,6 +502,18 @@ impl OutputArgs {
             && self.tcp_output.is_none()
             && self.tls_output.is_none()
             && self.udp_output.is_none()
+            && self.iroh_output.is_none()
+    }
+}
+
+impl IrohOutputArgs {
+    /// Returns true if no Iroh output fields are configured
+    pub fn is_empty(&self) -> bool {
+        self.iroh_output_addrs.is_none()
+            && self.iroh_output_relay_url.is_none()
+            && self.iroh_output_alpn.is_none()
+            && self.iroh_output_secret_key.is_none()
+            && !self.iroh_output_no_relay
     }
 }
 
@@ -488,6 +635,10 @@ pub struct ProgramArgs {
     #[command(flatten)]
     pub tls_listen_input: TlsListenInputArgs,
     #[command(flatten)]
+    pub iroh_input: IrohInputArgs,
+    #[command(flatten)]
+    pub iroh_listen_input: IrohListenInputArgs,
+    #[command(flatten)]
     pub decryption_args: DecryptionArgs,
     #[command(flatten)]
     pub encryption_args: EncryptionArgs,
@@ -499,6 +650,8 @@ pub struct ProgramArgs {
     pub https_output: HttpsOutputArgs,
     #[command(flatten)]
     pub tls_output: TlsOutputArgs,
+    #[command(flatten)]
+    pub iroh_output: IrohOutputArgs,
     #[command(flatten)]
     pub logging_args: LoggingArgs,
 }
@@ -1088,6 +1241,128 @@ impl ProgramArgs {
         }
     }
 
+    /// Prepare a reader for Iroh outbound input
+    async fn handle_iroh_input(&self) -> Result<Reader, DatapipeError> {
+        let Some(ref peer_str) = self.input.iroh_input else {
+            return Err(DatapipeError::ValidationError(
+                "Missing --iroh-input EndpointId".to_string(),
+            ));
+        };
+        let peer_id = parse_iroh_endpoint_id(peer_str)?;
+        let direct_addrs = match self.iroh_input.iroh_input_addrs {
+            Some(ref addrs_str) => parse_iroh_socket_addrs(addrs_str)?,
+            None => Vec::new(),
+        };
+        let relay_url = match self.iroh_input.iroh_input_relay_url {
+            Some(ref url_str) => Some(parse_iroh_relay_url(url_str)?),
+            None => None,
+        };
+        let alpn = match self.iroh_input.iroh_input_alpn {
+            Some(ref alpn_str) => {
+                if alpn_str.trim().is_empty() {
+                    let error_message = "Iroh input ALPN cannot be empty".to_string();
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError(error_message));
+                }
+                alpn_str.as_bytes().to_vec()
+            }
+            None => DEFAULT_IROH_ALPN.to_vec(),
+        };
+        let secret_key = match self.iroh_input.iroh_input_secret_key {
+            Some(ref key_str) => Some(parse_iroh_secret_key(key_str)?),
+            None => None,
+        };
+        let config = IrohConnectConfig {
+            target_id: peer_id,
+            target_addrs: direct_addrs,
+            relay_url,
+            alpn,
+            secret_key,
+            no_relay: self.iroh_input.iroh_input_no_relay,
+        };
+        match IrohReader::new(config).await {
+            Ok(iroh_reader) => {
+                info!("Using Iroh input connected to peer {}", peer_id);
+                Ok(Reader::Iroh(iroh_reader))
+            }
+            Err(error) => {
+                let error_message = format!(
+                    "Iroh input error connecting to {}: {}",
+                    peer_id,
+                    error_root_cause(&error)
+                );
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
+            }
+        }
+    }
+
+    /// Prepare a reader for Iroh listen input
+    async fn handle_iroh_listen_input(&self) -> Result<Reader, DatapipeError> {
+        let bind_addr = match self.iroh_listen_input.iroh_listen_input_bind_addr {
+            Some(ref addr_str) => {
+                let parsed = addr_str
+                    .trim()
+                    .parse::<std::net::SocketAddr>()
+                    .map_err(|err| {
+                        let error_message =
+                            format!("Invalid Iroh listen bind address '{addr_str}': {err}");
+                        error!("{error_message}");
+                        DatapipeError::ValidationError(error_message)
+                    })?;
+                Some(parsed)
+            }
+            None => None,
+        };
+        let secret_key = match self.iroh_listen_input.iroh_listen_input_secret_key {
+            Some(ref key_str) => Some(parse_iroh_secret_key(key_str)?),
+            None => None,
+        };
+        let alpn = match self.iroh_listen_input.iroh_listen_input_alpn {
+            Some(ref alpn_str) => {
+                if alpn_str.trim().is_empty() {
+                    let error_message = "Iroh listen input ALPN cannot be empty".to_string();
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError(error_message));
+                }
+                alpn_str.as_bytes().to_vec()
+            }
+            None => DEFAULT_IROH_ALPN.to_vec(),
+        };
+        let relay_url = match self.iroh_listen_input.iroh_listen_input_relay_url {
+            Some(ref url_str) => Some(parse_iroh_relay_url(url_str)?),
+            None => None,
+        };
+        let allowed_peer = match self.iroh_listen_input.iroh_listen_input_allowed_peer {
+            Some(ref peer_str) => Some(parse_iroh_endpoint_id(peer_str)?),
+            None => None,
+        };
+        let config = IrohListenConfig {
+            bind_addr,
+            secret_key,
+            alpn,
+            relay_url,
+            allowed_peer,
+            no_relay: self.iroh_listen_input.iroh_listen_input_no_relay,
+        };
+        match IrohListenReader::new(config).await {
+            Ok(iroh_listen_reader) => {
+                info!(
+                    "Using Iroh listen input on EndpointId: {} (local addrs: {:?})",
+                    iroh_listen_reader.endpoint_id(),
+                    iroh_listen_reader.local_addrs()
+                );
+                Ok(Reader::IrohListen(iroh_listen_reader))
+            }
+            Err(error) => {
+                let error_message =
+                    format!("Iroh listen input error: {}", error_root_cause(&error));
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
+            }
+        }
+    }
+
     /// Select the wanted input implementation from the command line args
     pub(crate) async fn get_input_reader(&self) -> Result<Reader, DatapipeError> {
         let mut maybe_reader: Option<Reader> = None;
@@ -1130,6 +1405,14 @@ impl ProgramArgs {
         if self.input.udp_multicast_input.is_some() {
             Self::check_reader_set(&maybe_reader)?;
             maybe_reader = Some(self.handle_udp_multicast_input().await?);
+        }
+        if self.input.iroh_input.is_some() {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_iroh_input().await?);
+        }
+        if self.input.iroh_listen_input {
+            Self::check_reader_set(&maybe_reader)?;
+            maybe_reader = Some(self.handle_iroh_listen_input().await?);
         }
         match maybe_reader {
             Some(reader) => Ok(reader),
@@ -1436,6 +1719,61 @@ impl ProgramArgs {
         }
     }
 
+    async fn handle_iroh_output(&self) -> Result<Writer, DatapipeError> {
+        let Some(ref peer_str) = self.output.iroh_output else {
+            return Err(DatapipeError::ValidationError(
+                "Missing --iroh-output EndpointId".to_string(),
+            ));
+        };
+        let peer_id = parse_iroh_endpoint_id(peer_str)?;
+        let direct_addrs = match self.iroh_output.iroh_output_addrs {
+            Some(ref addrs_str) => parse_iroh_socket_addrs(addrs_str)?,
+            None => Vec::new(),
+        };
+        let relay_url = match self.iroh_output.iroh_output_relay_url {
+            Some(ref url_str) => Some(parse_iroh_relay_url(url_str)?),
+            None => None,
+        };
+        let alpn = match self.iroh_output.iroh_output_alpn {
+            Some(ref alpn_str) => {
+                if alpn_str.trim().is_empty() {
+                    let error_message = "Iroh output ALPN cannot be empty".to_string();
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError(error_message));
+                }
+                alpn_str.as_bytes().to_vec()
+            }
+            None => DEFAULT_IROH_ALPN.to_vec(),
+        };
+        let secret_key = match self.iroh_output.iroh_output_secret_key {
+            Some(ref key_str) => Some(parse_iroh_secret_key(key_str)?),
+            None => None,
+        };
+        let config = IrohConnectConfig {
+            target_id: peer_id,
+            target_addrs: direct_addrs,
+            relay_url,
+            alpn,
+            secret_key,
+            no_relay: self.iroh_output.iroh_output_no_relay,
+        };
+        match IrohWriter::new(config).await {
+            Ok(iroh_writer) => {
+                info!("Using Iroh output connected to peer {}", peer_id);
+                Ok(Writer::Iroh(iroh_writer))
+            }
+            Err(error) => {
+                let error_message = format!(
+                    "Iroh output error connecting to {}: {}",
+                    peer_id,
+                    error_root_cause(&error)
+                );
+                error!("{error_message}");
+                Err(DatapipeError::InputOutputError(error_message))
+            }
+        }
+    }
+
     pub(crate) async fn get_output_writers(&self) -> Result<Vec<Writer>, DatapipeError> {
         let mut writers: Vec<Writer> = Vec::new();
         if self.output.file_output.is_some() {
@@ -1465,6 +1803,10 @@ impl ProgramArgs {
         if self.output.udp_output.is_some() {
             let udp_writer = self.handle_udp_output().await?;
             writers.push(udp_writer);
+        }
+        if self.output.iroh_output.is_some() {
+            let iroh_writer = self.handle_iroh_output().await?;
+            writers.push(iroh_writer);
         }
         if writers.is_empty() {
             let error_message = "No output destination provided!";

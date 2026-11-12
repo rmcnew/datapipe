@@ -390,3 +390,118 @@ async fn integration_test_license() {
     assert!(stdout.contains("GNU AFFERO GENERAL PUBLIC LICENSE"));
     assert!(stdout.contains("Version 3, 19 November 2007"));
 }
+
+#[tokio::test]
+async fn integration_test_iroh_file() {
+    start_after_random_delay(RANDOM_DELAY_MAX).await;
+    let test_document_pathbuf = get_test_document().unwrap();
+    let temp_dir_pathbuf = get_temp_dir();
+    let mut output_file_path = temp_dir_pathbuf.clone();
+    let mut random_filename = generate_random_string(16);
+    random_filename.push_str(".pdf");
+    output_file_path.push(&random_filename);
+
+    let port = get_unused_port().await.unwrap();
+    let bind_address = format!("127.0.0.1:{port}");
+    let secret_key = iroh::SecretKey::generate();
+    let secret_key_hex = datapipe::iroh_reader_writer::format_iroh_secret_key_hex(&secret_key);
+    let endpoint_id = secret_key.public().to_string();
+
+    let listen_args = vec![
+        "--iroh-listen-input".to_string(),
+        "--iroh-listen-input-bind-addr".to_string(),
+        bind_address.clone(),
+        "--iroh-listen-input-secret-key".to_string(),
+        secret_key_hex,
+        "--iroh-listen-input-no-relay".to_string(),
+        "--file-output".to_string(),
+        output_file_path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
+    ];
+    let send_args = vec![
+        "--file-input".to_string(),
+        test_document_pathbuf.to_str().unwrap().to_string(),
+        "--iroh-output".to_string(),
+        endpoint_id,
+        "--iroh-output-addrs".to_string(),
+        bind_address,
+        "--iroh-output-no-relay".to_string(),
+        "--no-metrics".to_string(),
+    ];
+
+    let mut children = Vec::new();
+    children.push(tokio::spawn(run_datapipe(listen_args)));
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    children.push(tokio::spawn(run_datapipe(send_args)));
+    for child in children {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), child).await;
+    }
+
+    assert!(output_file_path.exists());
+    assert!(
+        identical_contents(&test_document_pathbuf, &output_file_path)
+            .await
+            .unwrap()
+    );
+    remove_file(&output_file_path).await.unwrap();
+}
+
+#[tokio::test]
+async fn integration_test_iroh_encrypted_file() {
+    start_after_random_delay(RANDOM_DELAY_MAX).await;
+    let test_document_pathbuf = get_test_document().unwrap();
+    let temp_dir_pathbuf = get_temp_dir();
+    let mut output_file_path = temp_dir_pathbuf.clone();
+    let mut random_filename = generate_random_string(16);
+    random_filename.push_str(".pdf");
+    output_file_path.push(&random_filename);
+
+    let encryption_key = EncryptionKey::generate().to_string();
+    let port = get_unused_port().await.unwrap();
+    let bind_address = format!("127.0.0.1:{port}");
+    let secret_key = iroh::SecretKey::generate();
+    let secret_key_hex = datapipe::iroh_reader_writer::format_iroh_secret_key_hex(&secret_key);
+    let endpoint_id = secret_key.public().to_string();
+
+    let listen_args = vec![
+        "--iroh-listen-input".to_string(),
+        "--iroh-listen-input-bind-addr".to_string(),
+        bind_address.clone(),
+        "--iroh-listen-input-secret-key".to_string(),
+        secret_key_hex,
+        "--iroh-listen-input-no-relay".to_string(),
+        "--decrypt".to_string(),
+        encryption_key.clone(),
+        "--file-output".to_string(),
+        output_file_path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
+    ];
+    let send_args = vec![
+        "--file-input".to_string(),
+        test_document_pathbuf.to_str().unwrap().to_string(),
+        "--encrypt".to_string(),
+        encryption_key,
+        "--iroh-output".to_string(),
+        endpoint_id,
+        "--iroh-output-addrs".to_string(),
+        bind_address,
+        "--iroh-output-no-relay".to_string(),
+        "--no-metrics".to_string(),
+    ];
+
+    let mut children = Vec::new();
+    children.push(tokio::spawn(run_datapipe(listen_args)));
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    children.push(tokio::spawn(run_datapipe(send_args)));
+    for child in children {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), child).await;
+    }
+
+    assert!(output_file_path.exists());
+    assert!(
+        identical_contents(&test_document_pathbuf, &output_file_path)
+            .await
+            .unwrap()
+    );
+    remove_file(&output_file_path).await.unwrap();
+}

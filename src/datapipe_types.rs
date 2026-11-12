@@ -81,10 +81,16 @@ pub trait InputReader {
     async fn read(&mut self) -> Result<Bytes, Error>;
 }
 
-/// Writer trait to simplify reading from various output sinks
+/// Writer trait to simplify writing to various output sinks
 #[allow(async_fn_in_trait)]
 pub trait OutputWriter {
+    /// Writes a slice of bytes to the underlying output destination.
     async fn write(&mut self, bytes: &[u8]) -> Result<(), Error>;
+
+    /// Flushes and gracefully closes the output writer after all stream data has been written.
+    async fn close(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// generate a String of the given length with pseudorandom content
