@@ -117,7 +117,7 @@ const BASE64URL_ALPHABET: &[u8; 64] =
 fn encode_base64url_51(bytes: &[u8; REQUIRED_LENGTH]) -> String {
     let mut out = String::with_capacity(KEY_DPK1_PREFIX.len() + KEY_DPK1_BASE64_LEN);
     out.push_str(KEY_DPK1_PREFIX);
-    for chunk in bytes.chunks_exact(3) {
+    for chunk in bytes.as_chunks::<3>().0 {
         let b0 = chunk[0] as usize;
         let b1 = chunk[1] as usize;
         let b2 = chunk[2] as usize;
@@ -157,7 +157,7 @@ fn decode_base64_51(encoded: &str) -> Result<[u8; REQUIRED_LENGTH], DatapipeErro
 
     let mut decoded = [0u8; REQUIRED_LENGTH];
     let mut out_idx = 0;
-    for chunk in encoded_bytes.chunks_exact(4) {
+    for chunk in encoded_bytes.as_chunks::<4>().0 {
         let v0 = decode_base64_char(chunk[0]).ok_or_else(|| {
             DatapipeError::ValidationError("Invalid base64 character in encryption key".to_string())
         })?;
@@ -200,7 +200,7 @@ fn decode_hex_51(encoded: &str) -> Result<[u8; REQUIRED_LENGTH], DatapipeError> 
     }
 
     let mut decoded = [0u8; REQUIRED_LENGTH];
-    for (idx, pair) in encoded_bytes.chunks_exact(2).enumerate() {
+    for (idx, pair) in encoded_bytes.as_chunks::<2>().0.iter().enumerate() {
         let hi = decode_hex_nibble(pair[0]).ok_or_else(|| {
             DatapipeError::ValidationError("Invalid hex character in encryption key".to_string())
         })?;
