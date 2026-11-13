@@ -1,0 +1,9 @@
+# Temporary ignore for RUSTSEC-2024-0436 ("paste - no longer maintained").
+# `paste` is pulled in transitively via iroh -> netwatch (0.19.x) -> netlink-packet-core (0.8.x).
+# `netlink-packet-core` >= 0.9.0 removes `paste`, so remove this ignore once `iroh` updates
+# its `netwatch` / netlink dependencies.
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0436",
+]
+
