@@ -463,14 +463,19 @@ async fn test_cli_encrypt_generate_key() {
 
     assert!(output.status.success());
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("Generated encryption key:"));
-    let key_part = stdout_str
+    let stderr_str = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout_str.contains("Generated encryption key:"),
+        "Generated key must not be printed to stdout"
+    );
+    assert!(stderr_str.contains("Generated encryption key:"));
+    let key_part = stderr_str
         .lines()
         .find(|l| l.contains("Generated encryption key:"))
-        .and_then(|l| l.split(':').nth(1))
-        .map(|s| s.trim())
-        .expect("Failed to parse generated key from stdout");
-    assert_eq!(key_part.len(), 51);
+        .and_then(|l| l.split_once(':'))
+        .map(|(_, rest)| rest.trim())
+        .expect("Failed to parse generated key from stderr");
+    assert!(key_part.starts_with("dpk1:"));
     assert!(EncryptionKey::new(key_part).is_ok());
     assert!(temp_out.path.exists());
 }

@@ -117,6 +117,69 @@ fn validate_iroh_output(peer_str: &str, args: &IrohOutputArgs) -> Result<(), Dat
     Ok(())
 }
 
+fn count_outputs(output: &OutputArgs) -> usize {
+    usize::from(output.file_output.is_some())
+        + usize::from(output.http_output.is_some())
+        + usize::from(output.https_output.is_some())
+        + usize::from(output.stdout_output)
+        + usize::from(output.tcp_output.is_some())
+        + usize::from(output.tls_output.is_some())
+        + usize::from(output.udp_output.is_some())
+        + usize::from(output.iroh_output.is_some())
+}
+
+fn validate_output_params(
+    output: &OutputArgs,
+    http_output: &HttpOutputArgs,
+    https_output: &HttpsOutputArgs,
+    tls_output: &TlsOutputArgs,
+    iroh_output: &IrohOutputArgs,
+) -> Result<(), DatapipeError> {
+    if let Some(ref url) = output.http_output
+        && !url.starts_with("http://")
+    {
+        let error_message = format!("HTTP output URL '{url}' must start with 'http://'");
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
+    if output.http_output.is_some()
+        && let Some(ref delim) = http_output.http_output_delimiter
+        && delim.is_empty()
+    {
+        let error_message = "HTTP output delimiter cannot be empty.".to_string();
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
+    if let Some(ref url) = output.https_output
+        && !url.starts_with("https://")
+    {
+        let error_message = format!("HTTPS output URL '{url}' must start with 'https://'");
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
+    if output.https_output.is_some()
+        && let Some(ref delim) = https_output.https_output_delimiter
+        && delim.is_empty()
+    {
+        let error_message = "HTTPS output delimiter cannot be empty.".to_string();
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
+    if output.tls_output.is_some()
+        && tls_output.tls_output_cert_chain.is_some() != tls_output.tls_output_client_key.is_some()
+    {
+        let error_message =
+            "Both TLS output certificate chain and client key must be specified together if either is used."
+                .to_string();
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
+    if let Some(ref peer_str) = output.iroh_output {
+        validate_iroh_output(peer_str, iroh_output)?;
+    }
+    Ok(())
+}
+
 impl OutputDestinationConfig {
     /// Create a new empty `OutputDestinationConfig`.
     ///
@@ -165,31 +228,7 @@ impl OutputDestinationConfig {
     /// # }
     /// ```
     pub fn validate(&self) -> Result<(), DatapipeError> {
-        let mut output_count = 0;
-        if self.output.file_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.http_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.https_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.stdout_output {
-            output_count += 1;
-        }
-        if self.output.tcp_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.tls_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.udp_output.is_some() {
-            output_count += 1;
-        }
-        if self.output.iroh_output.is_some() {
-            output_count += 1;
-        }
+        let output_count = count_outputs(&self.output);
 
         if output_count == 0 {
             let error_message =
@@ -206,37 +245,13 @@ impl OutputDestinationConfig {
             return Err(DatapipeError::ValidationError(error_message));
         }
 
-        if let Some(ref url) = self.output.http_output
-            && !url.starts_with("http://")
-        {
-            let error_message = format!("HTTP output URL '{url}' must start with 'http://'");
-            error!("{error_message}");
-            return Err(DatapipeError::ValidationError(error_message));
-        }
-        if let Some(ref url) = self.output.https_output
-            && !url.starts_with("https://")
-        {
-            let error_message = format!("HTTPS output URL '{url}' must start with 'https://'");
-            error!("{error_message}");
-            return Err(DatapipeError::ValidationError(error_message));
-        }
-
-        if self.output.tls_output.is_some()
-            && self.tls_output.tls_output_cert_chain.is_some()
-                != self.tls_output.tls_output_client_key.is_some()
-        {
-            let error_message =
-                "Both TLS output certificate chain and client key must be specified together if either is used."
-                    .to_string();
-            error!("{error_message}");
-            return Err(DatapipeError::ValidationError(error_message));
-        }
-
-        if let Some(ref peer_str) = self.output.iroh_output {
-            validate_iroh_output(peer_str, &self.iroh_output)?;
-        }
-
-        Ok(())
+        validate_output_params(
+            &self.output,
+            &self.http_output,
+            &self.https_output,
+            &self.tls_output,
+            &self.iroh_output,
+        )
     }
 }
 
@@ -329,13 +344,60 @@ impl DatapipeConfig {
         Self::from_toml_str(&content)
     }
 
+    fn contains_secrets(&self) -> bool {
+        self.encryption_args.encryption_key.is_some()
+            || self.decryption_args.decryption_key.is_some()
+            || self.iroh_input.iroh_input_secret_key.is_some()
+            || self
+                .iroh_listen_input
+                .iroh_listen_input_secret_key
+                .is_some()
+            || self.iroh_output.iroh_output_secret_key.is_some()
+            || self.outputs.as_ref().is_some_and(|outs| {
+                outs.iter()
+                    .any(|out| out.iroh_output.iroh_output_secret_key.is_some())
+            })
+    }
+
     /// Serialize and save this configuration to a TOML file on disk.
+    ///
+    /// On Unix systems, configurations containing secret keys are written with
+    /// restrictive `0600` file permissions.
     ///
     /// # Errors
     /// Returns [`DatapipeError::ConfigurationError`] if serialization fails, or
     /// [`DatapipeError::InputOutputError`] if writing the file fails.
     pub fn save_to_file(&self, path: &Path) -> Result<(), DatapipeError> {
         let toml_string = self.to_toml_string()?;
+        #[cfg(unix)]
+        if self.contains_secrets() {
+            use std::io::Write;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+            let map_io_err = |error: std::io::Error| {
+                let error_message = format!(
+                    "Cannot write configuration file to {:?}: {}",
+                    path,
+                    error_root_cause(&error)
+                );
+                error!("{error_message}");
+                DatapipeError::InputOutputError(error_message)
+            };
+
+            if path.exists() {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                    .map_err(map_io_err)?;
+            }
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)
+                .map_err(map_io_err)?;
+            file.write_all(toml_string.as_bytes()).map_err(map_io_err)?;
+            return Ok(());
+        }
         std::fs::write(path, toml_string).map_err(|error| {
             let error_message = format!(
                 "Cannot write configuration file to {:?}: {}",
@@ -353,7 +415,7 @@ impl DatapipeConfig {
     /// - At least one output destination is defined.
     /// - URL prefixes are valid for HTTP and HTTPS protocols.
     /// - TLS certificate and key pairs are consistent.
-    /// - Encryption and decryption keys are valid 51-byte strings.
+    /// - Encryption and decryption keys are valid (`dpk1:...`, `hex:...`, or legacy 51-byte strings).
     ///
     /// # Errors
     /// Returns [`DatapipeError::ValidationError`] if any requirement is violated.
@@ -427,93 +489,46 @@ impl DatapipeConfig {
         }
 
         // Validate output: at least one output destination
-        if let Some(ref outputs) = self.outputs {
-            if outputs.is_empty() && self.output.is_empty() {
-                let error_message =
-                    "No output destination provided! At least one output destination must be configured."
-                        .to_string();
-                error!("{error_message}");
-                return Err(DatapipeError::ValidationError(error_message));
-            }
-            if outputs.len() > 64 {
-                let error_message = format!(
-                    "Maximum number of outputs is 64; provided {}",
-                    outputs.len()
-                );
-                error!("{error_message}");
-                return Err(DatapipeError::ValidationError(error_message));
-            }
-            for (idx, out) in outputs.iter().enumerate() {
-                out.validate().map_err(|err| {
-                    let error_message = format!("Output #{} validation error: {err}", idx + 1);
+        match self.outputs {
+            Some(ref outputs) if !outputs.is_empty() => {
+                if !self.output.is_empty() {
+                    let error_message =
+                        "Cannot configure both [output] and [[outputs]] simultaneously."
+                            .to_string();
                     error!("{error_message}");
-                    DatapipeError::ValidationError(error_message)
-                })?;
+                    return Err(DatapipeError::ValidationError(error_message));
+                }
+                if outputs.len() > 64 {
+                    let error_message = format!(
+                        "Maximum number of outputs is 64; provided {}",
+                        outputs.len()
+                    );
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError(error_message));
+                }
+                for (idx, out) in outputs.iter().enumerate() {
+                    out.validate().map_err(|err| {
+                        let error_message = format!("Output #{} validation error: {err}", idx + 1);
+                        error!("{error_message}");
+                        DatapipeError::ValidationError(error_message)
+                    })?;
+                }
             }
-        } else {
-            let mut output_count = 0;
-            if self.output.file_output.is_some() {
-                output_count += 1;
-            }
-            if self.output.http_output.is_some() {
-                output_count += 1;
-            }
-            if self.output.https_output.is_some() {
-                output_count += 1;
-            }
-            if self.output.stdout_output {
-                output_count += 1;
-            }
-            if self.output.tcp_output.is_some() {
-                output_count += 1;
-            }
-            if self.output.tls_output.is_some() {
-                output_count += 1;
-            }
-            if self.output.udp_output.is_some() {
-                output_count += 1;
-            }
-            if self.output.iroh_output.is_some() {
-                output_count += 1;
-            }
-
-            if output_count == 0 {
-                let error_message =
-                    "No output destination provided! At least one output destination must be configured."
-                        .to_string();
-                error!("{error_message}");
-                return Err(DatapipeError::ValidationError(error_message));
-            }
-
-            if let Some(ref url) = self.output.http_output
-                && !url.starts_with("http://")
-            {
-                let error_message = format!("HTTP output URL '{url}' must start with 'http://'");
-                error!("{error_message}");
-                return Err(DatapipeError::ValidationError(error_message));
-            }
-            if let Some(ref url) = self.output.https_output
-                && !url.starts_with("https://")
-            {
-                let error_message = format!("HTTPS output URL '{url}' must start with 'https://'");
-                error!("{error_message}");
-                return Err(DatapipeError::ValidationError(error_message));
-            }
-
-            // Validate TLS output options consistency
-            if self.output.tls_output.is_some()
-                && self.tls_output.tls_output_cert_chain.is_some()
-                    != self.tls_output.tls_output_client_key.is_some()
-            {
-                let error_message =
-                    "Both TLS output certificate chain and client key must be specified together if either is used."
-                        .to_string();
-                error!("{error_message}");
-                return Err(DatapipeError::ValidationError(error_message));
-            }
-
-            if let Some(ref peer_str) = self.output.iroh_output {
-                validate_iroh_output(peer_str, &self.iroh_output)?;
+            _ => {
+                if count_outputs(&self.output) == 0 {
+                    let error_message =
+                        "No output destination provided! At least one output destination must be configured."
+                            .to_string();
+                    error!("{error_message}");
+                    return Err(DatapipeError::ValidationError(error_message));
+                }
+                validate_output_params(
+                    &self.output,
+                    &self.http_output,
+                    &self.https_output,
+                    &self.tls_output,
+                    &self.iroh_output,
+                )?;
             }
         }
 
@@ -627,6 +642,14 @@ impl DatapipeConfig {
         // Validate decryption key
         if let Some(ref key) = self.decryption_args.decryption_key {
             EncryptionKey::new(key)?;
+        }
+        if self.decryption_args.decrypt_allow_legacy
+            && self.decryption_args.decryption_key.is_none()
+        {
+            let error_message =
+                "decrypt_allow_legacy requires decryption_key to be configured.".to_string();
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
         }
 
         Ok(())
@@ -871,5 +894,44 @@ mod tests {
         config.input.iroh_input = Some("not-a-valid-endpoint-id".to_string());
         config.output.stdout_output = true;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_rejects_empty_http_delimiter_and_mixed_output_sections() {
+        let mut config = DatapipeConfig::new();
+        config.input.stdin_input = true;
+        config.output.http_output = Some("http://127.0.0.1:8080/ingest".to_string());
+        config.http_output.http_output_delimiter = Some(Vec::new());
+        assert!(config.validate().is_err());
+
+        let mut mixed = DatapipeConfig::new();
+        mixed.input.stdin_input = true;
+        mixed.output.stdout_output = true;
+        let mut dest = OutputDestinationConfig::new();
+        dest.output.stdout_output = true;
+        mixed.outputs = Some(vec![dest]);
+        assert!(mixed.validate().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_to_file_sets_0600_when_secrets_present() -> Result<(), DatapipeError> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut config = DatapipeConfig::new();
+        config.input.stdin_input = true;
+        config.output.stdout_output = true;
+        config.encryption_args.encryption_key =
+            Some(crate::datapipe_types::EncryptionKey::generate().to_string());
+
+        let path = std::env::temp_dir().join(format!(
+            "datapipe_secret_cfg_{}.toml",
+            crate::datapipe_types::generate_random_string(12)
+        ));
+        config.save_to_file(&path)?;
+        let mode = std::fs::metadata(&path)?.permissions().mode() & 0o777;
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(mode, 0o600);
+        Ok(())
     }
 }

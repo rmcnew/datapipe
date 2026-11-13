@@ -2,9 +2,11 @@ use crate::datapipe_types::InputReader;
 /// Reader for UDP
 use bytes::Bytes;
 use log::trace;
-use std::io::Error;
-use std::net::Ipv4Addr;
+use std::io::{Error, ErrorKind};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::UdpSocket;
+
+const UDP_READ_BUFFER_SIZE: usize = 65_535;
 
 #[derive(Debug)]
 pub struct UdpReader {
@@ -22,11 +24,28 @@ impl UdpReader {
 
     pub async fn new_multicast(address: &str) -> Result<UdpReader, Error> {
         trace!("UdpReader multicast listening on {}", address);
-        let addr = address.parse::<Ipv4Addr>().unwrap();
-        let addr_port_zero = format!("{}:0", addr);
-        match UdpSocket::bind(addr_port_zero).await {
+        let (multicast_addr, port) = if let Ok(sock_v4) = address.parse::<SocketAddrV4>() {
+            (*sock_v4.ip(), sock_v4.port())
+        } else if let Ok(ip_v4) = address.parse::<Ipv4Addr>() {
+            (ip_v4, 0)
+        } else {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "Invalid IPv4 multicast address '{address}': expected 'A.B.C.D' or 'A.B.C.D:PORT'"
+                ),
+            ));
+        };
+        if !multicast_addr.is_multicast() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("Address '{multicast_addr}' is not an IPv4 multicast address"),
+            ));
+        }
+        let bind_addr = SocketAddrV4::new(multicast_addr, port);
+        match UdpSocket::bind(bind_addr).await {
             Ok(socket) => {
-                socket.join_multicast_v4(addr, Ipv4Addr::UNSPECIFIED)?;
+                socket.join_multicast_v4(multicast_addr, Ipv4Addr::UNSPECIFIED)?;
                 Ok(UdpReader { socket })
             }
             Err(error) => Err(error),
@@ -36,14 +55,15 @@ impl UdpReader {
 
 impl InputReader for UdpReader {
     async fn read(&mut self) -> Result<Bytes, Error> {
-        let mut vec_bytes = Vec::with_capacity(512);
-        match self.socket.recv_buf_from(&mut vec_bytes).await {
-            Ok((_length, _source_address)) => {
+        let mut buf = vec![0u8; UDP_READ_BUFFER_SIZE];
+        match self.socket.recv_from(&mut buf).await {
+            Ok((length, source_address)) => {
                 trace!(
                     "UdpReader received {} bytes from {}",
-                    _length, _source_address
+                    length, source_address
                 );
-                Ok(Bytes::from(vec_bytes))
+                buf.truncate(length);
+                Ok(Bytes::from(buf))
             }
             Err(error) => Err(error),
         }

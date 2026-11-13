@@ -242,6 +242,12 @@ impl IrohListenReader {
         let (data_tx, data_rx) = channel(IROH_LISTEN_CHANNEL_CAPACITY);
         let accept_endpoint = endpoint.clone();
         let allowed_peer = config.allowed_peer;
+        if allowed_peer.is_none() {
+            warn!(
+                "IrohListenReader is listening without an allowed_peer filter (--iroh-listen-input-allowed-peer); any peer knowing the EndpointId {} and ALPN can connect",
+                endpoint.id()
+            );
+        }
 
         let accept_task = tokio::spawn(async move {
             let mut accepted_conn: Option<Connection> = None;

@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let mut args = ProgramArgs::parse();
+    let args = ProgramArgs::parse();
 
     // If --version is passed, print version, name, and copyright, then exit
     if args.version {
@@ -79,12 +79,12 @@ async fn main() -> ExitCode {
     }
 
     // If --use-config is passed, load and validate the configuration file
-    if let Some(ref config_path) = args.use_config {
+    let loaded_config = if let Some(ref config_path) = args.use_config {
         if let Err(error) = args.validate() {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
-        let config = match DatapipeConfig::load_from_file(config_path) {
+        let mut config = match DatapipeConfig::load_from_file(config_path) {
             Ok(config) => config,
             Err(error) => {
                 eprintln!(
@@ -98,33 +98,50 @@ async fn main() -> ExitCode {
             eprintln!("Configuration validation error: {error}");
             return ExitCode::FAILURE;
         }
-        let cli_no_metrics = args.no_metrics;
-        args = ProgramArgs::from(config);
-        if cli_no_metrics {
-            args.no_metrics = true;
+        if args.no_metrics {
+            config.no_metrics = true;
         }
+        Some(config)
     } else {
         // Standard CLI execution without config file
         if let Err(error) = args.validate() {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
-    }
-
-    let log_dir = match args.logging_args.log_dir {
-        Some(ref log_dir_string) => log_dir_string,
-        None => "/var/tmp",
+        None
     };
-    let _log_handle = match init_logger(log_dir, "datapipe", args.logging_args.keep_logs) {
+
+    let (log_dir, keep_logs, no_metrics) = match loaded_config {
+        Some(ref config) => (
+            config.logging_args.log_dir.as_deref().unwrap_or("/var/tmp"),
+            config.logging_args.keep_logs,
+            config.no_metrics,
+        ),
+        None => (
+            args.logging_args.log_dir.as_deref().unwrap_or("/var/tmp"),
+            args.logging_args.keep_logs,
+            args.no_metrics,
+        ),
+    };
+
+    let _log_handle = match init_logger(log_dir, "datapipe", keep_logs) {
         Ok(handle) => handle,
         Err(err) => {
             eprintln!("Logger error: {}", err);
             return ExitCode::FAILURE;
         }
     };
-    info!("Args are: {:?}", args);
+    if let Some(ref config) = loaded_config {
+        info!("Loaded configuration: {:?}", config);
+    } else {
+        info!("Args are: {:?}", args);
+    }
 
-    let parameters = match args.to_parameters().await {
+    let parameters = match loaded_config {
+        Some(ref config) => config.to_parameters().await,
+        None => args.to_parameters().await,
+    };
+    let parameters = match parameters {
         Ok(parameters) => parameters,
         Err(err) => {
             eprintln!("{}", err);
@@ -132,7 +149,7 @@ async fn main() -> ExitCode {
         }
     };
 
-    if !args.no_metrics {
+    if !no_metrics {
         if let Some(ref metrics) = parameters.metrics {
             let display_guard = datapipe::metrics::LiveDisplayGuard::start(
                 metrics.clone(),

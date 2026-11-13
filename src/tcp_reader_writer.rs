@@ -32,11 +32,11 @@ impl TcpReaderWriter {
 
 impl InputReader for TcpReaderWriter {
     async fn read(&mut self) -> Result<Bytes, Error> {
-        let mut vec_bytes = Vec::with_capacity(TCP_READ_BUFFER_SIZE);
-        match self.tcp_stream.read(&mut vec_bytes).await {
-            Ok(_length) => {
-                info!("TcpReaderWriter received {} bytes", _length);
-                Ok(Bytes::from(vec_bytes))
+        let mut buf = [0u8; TCP_READ_BUFFER_SIZE];
+        match self.tcp_stream.read(&mut buf).await {
+            Ok(length) => {
+                info!("TcpReaderWriter received {} bytes", length);
+                Ok(Bytes::copy_from_slice(&buf[..length]))
             }
             Err(error) => Err(error),
         }
@@ -54,5 +54,10 @@ impl OutputWriter for TcpReaderWriter {
             warn!("Byte slice was empty; nothing to write");
         }
         Ok(())
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
+        self.tcp_stream.flush().await?;
+        self.tcp_stream.shutdown().await
     }
 }

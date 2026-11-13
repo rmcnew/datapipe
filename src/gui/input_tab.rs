@@ -1,7 +1,8 @@
 //! Input tab Material Design 3 view and protocol configuration form fields.
 
 use crate::gui::style::{
-    bottom_action_bar, compact_tonal_button, m3_card, m3_monospace_field, m3_text_field,
+    bottom_action_bar, compact_tonal_button, m3_card, m3_field_label as field_label,
+    m3_insecure_checkbox as insecure_checkbox, m3_monospace_field, m3_secret_field, m3_text_field,
     m3_text_field_enabled, m3_tonal_card, nav_next_button, palette, section_header, status_chip,
 };
 use crate::gui::types::{InputState, InputType, Tab};
@@ -78,16 +79,6 @@ pub fn show_input_tab(ui: &mut Ui, state: &mut InputState, active_tab: &mut Tab)
         });
 }
 
-fn field_label(ui: &mut Ui, label: &str) {
-    let p = palette(ui);
-    ui.label(
-        RichText::new(label)
-            .size(13.5)
-            .strong()
-            .color(p.on_surface_variant),
-    );
-}
-
 fn file_picker_row(ui: &mut Ui, value: &mut String, hint: &str, enabled: bool) {
     ui.horizontal(|ui| {
         let text_width = (ui.available_width() - 96.0).max(120.0);
@@ -97,16 +88,6 @@ fn file_picker_row(ui: &mut Ui, value: &mut String, hint: &str, enabled: bool) {
             && let Some(path) = rfd::FileDialog::new().pick_file()
         {
             *value = path.display().to_string();
-        }
-    });
-}
-
-fn insecure_checkbox(ui: &mut Ui, checked: &mut bool, label: &str) {
-    let p = palette(ui);
-    ui.horizontal(|ui| {
-        ui.checkbox(checked, label);
-        if *checked {
-            status_chip(ui, "INSECURE", p.warning_container, p.on_warning_container);
         }
     });
 }
@@ -172,11 +153,11 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
                 m3_text_field(ui, &mut state.https_rate, "1000", 140.0);
                 ui.end_row();
 
-                field_label(ui, "Root Certificates (PEM)");
+                field_label(ui, "Root Certificates (PEM or DER)");
                 file_picker_row(
                     ui,
                     &mut state.https_root_certificates,
-                    "Optional custom CA bundle (.pem)",
+                    "Optional custom CA bundle (PEM or DER)",
                     true,
                 );
                 ui.end_row();
@@ -230,29 +211,29 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
                 m3_text_field(ui, &mut state.tls_address, "127.0.0.1:9443", 260.0);
                 ui.end_row();
 
-                field_label(ui, "Client Cert Chain (DER)");
+                field_label(ui, "Client Cert Chain (PEM or DER)");
                 file_picker_row(
                     ui,
                     &mut state.tls_cert_chain,
-                    "Client certificate (.der)",
+                    "Client certificate (PEM or DER)",
                     true,
                 );
                 ui.end_row();
 
-                field_label(ui, "Client Private Key (DER)");
+                field_label(ui, "Client Private Key (PEM or DER)");
                 file_picker_row(
                     ui,
                     &mut state.tls_client_key,
-                    "Client private key (.der)",
+                    "Client private key (PEM or DER)",
                     true,
                 );
                 ui.end_row();
 
-                field_label(ui, "Custom Root CA (PEM)");
+                field_label(ui, "Custom Root CA (PEM or DER)");
                 file_picker_row(
                     ui,
                     &mut state.tls_root_ca,
-                    "Optional root CA certificate (.pem)",
+                    "Optional root CA certificate (PEM or DER)",
                     true,
                 );
                 ui.end_row();
@@ -272,20 +253,20 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
 
                 let manual_certs = !state.tls_listen_generate_self_signed;
 
-                field_label(ui, "Server Cert Chain (DER)");
+                field_label(ui, "Server Cert Chain (PEM or DER)");
                 file_picker_row(
                     ui,
                     &mut state.tls_listen_cert_chain,
-                    "Server certificate (.der)",
+                    "Server certificate (PEM or DER)",
                     manual_certs,
                 );
                 ui.end_row();
 
-                field_label(ui, "Server Private Key (DER)");
+                field_label(ui, "Server Private Key (PEM or DER)");
                 file_picker_row(
                     ui,
                     &mut state.tls_listen_server_key,
-                    "Server private key (.der)",
+                    "Server private key (PEM or DER)",
                     manual_certs,
                 );
                 ui.end_row();
@@ -354,9 +335,10 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
 
                 field_label(ui, "Local Secret Key (Optional)");
                 ui.horizontal(|ui| {
-                    let text_width = (ui.available_width() - 120.0).max(140.0);
-                    m3_monospace_field(
+                    let text_width = (ui.available_width() - 120.0).max(180.0);
+                    m3_secret_field(
                         ui,
+                        "input_iroh_secret_key",
                         &mut state.iroh_secret_key,
                         "Optional 64-character hex Ed25519 secret key",
                         text_width,
@@ -387,9 +369,10 @@ fn render_input_fields(ui: &mut Ui, state: &mut InputState) {
 
                 field_label(ui, "Local Secret Key (Optional)");
                 ui.horizontal(|ui| {
-                    let text_width = (ui.available_width() - 120.0).max(140.0);
-                    m3_monospace_field(
+                    let text_width = (ui.available_width() - 120.0).max(180.0);
+                    m3_secret_field(
                         ui,
+                        "input_iroh_listen_secret_key",
                         &mut state.iroh_listen_secret_key,
                         "Optional 64-character hex secret key for deterministic EndpointId",
                         text_width,

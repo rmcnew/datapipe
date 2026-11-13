@@ -306,13 +306,7 @@ pub fn run_gui() -> Result<(), eframe::Error> {
         options,
         Box::new(|cc| {
             configure_visuals(&cc.egui_ctx);
-            let app = match DatapipeApp::new() {
-                Ok(app) => app,
-                Err(err) => {
-                    eprintln!("Failed to initialize DatapipeApp runtime: {err}");
-                    std::process::exit(1);
-                }
-            };
+            let app = DatapipeApp::new()?;
             Ok(Box::new(app))
         }),
     )

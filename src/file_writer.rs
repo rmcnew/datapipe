@@ -24,9 +24,11 @@ impl FileWriter {
 
 impl OutputWriter for FileWriter {
     async fn write(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        match self.file.write(bytes).await {
-            Ok(_size) => Ok(()),
-            Err(error) => Err(error),
-        }
+        self.file.write_all(bytes).await
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
+        self.file.flush().await?;
+        self.file.shutdown().await
     }
 }
