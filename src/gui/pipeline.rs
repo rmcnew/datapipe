@@ -81,6 +81,12 @@ impl PipelineController {
 
     /// Starts the datapipe streaming pipeline in the background using the provided configuration.
     pub fn start(&mut self, rt_handle: &Handle, config: DatapipeConfig) {
+        if self.is_running() {
+            return;
+        }
+        if let Some(handle) = self.task_handle.take() {
+            handle.abort();
+        }
         let (tx, rx): (Sender<PipelineEvent>, Receiver<PipelineEvent>) = channel();
         self.event_receiver = Some(rx);
 

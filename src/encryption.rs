@@ -1,17 +1,24 @@
 use crate::datapipe_types::{DatapipeError, EncryptionKey};
 use aead_stream::{DecryptorBE32, EncryptorBE32};
-use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
+use chacha20poly1305::{KeyInit, XChaCha20Poly1305, aead::Payload};
 use log::{error, trace, warn};
 
-// This stream encryption library appends a 16-byte authentication tag to the end of the
-// encrypted message.  We use the following static tag to start each message in the
-// encrypted stream, followed by a variable-byte length that gives the length of the encrypted
-// message data AND the 16-byte authentication tag.  Thus each message in the encypted
-// stream has the following structure:
-// [MESSAGE_START][MESSAGE_LENGTH][encrypted message][authentication tag]
+/// Legacy v1 frame start magic (4 bytes) without AAD header binding or authenticated EOF.
 pub const MESSAGE_START: [u8; 4] = [0x29, 0x16, 0x4B, 0x74];
+/// Version 2 frame start magic (4 bytes) with AAD-bound header and authenticated EOF.
+pub const MESSAGE_START_V2: [u8; 4] = [0x29, 0x16, 0x4B, 0x75];
+
 const MESSAGE_START_LENGTH: usize = 4;
-const MIN_PREFIX_LENGTH: usize = 5; // MESSAGE_START length + minimum MessageLength length
+const FRAME_TYPE_DATA: u8 = 0x01;
+const FRAME_TYPE_LAST: u8 = 0x02;
+const AEAD_TAG_LENGTH: usize = 16;
+const MIN_PREFIX_LENGTH_V1: usize = 5; // MESSAGE_START (4) + min BER MessageLength (1)
+const MIN_PREFIX_LENGTH_V2: usize = 6; // MESSAGE_START_V2 (4) + frame_type (1) + min BER MessageLength (1)
+
+/// Maximum allowed ciphertext frame payload size (64 MiB), bounding decoder allocation
+/// and preventing integer overflow / OOM DoS attacks from crafted length headers.
+pub const MAX_CIPHER_FRAME_LEN: usize = 64 * 1024 * 1024;
+const MAX_PLAINTEXT_CHUNK_LEN: usize = MAX_CIPHER_FRAME_LEN - AEAD_TAG_LENGTH;
 
 #[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Decoded<T: Sized> {
@@ -33,6 +40,13 @@ fn test_message_length_encode_decode() {
     assert_eq!(message_length, decoded);
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum DecodeLengthStatus {
+    Complete(Decoded<MessageLength>),
+    Incomplete,
+    Invalid(String),
+}
+
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MessageLength {
     pub length_length: usize,  // how many bytes does the length use?
@@ -42,69 +56,18 @@ pub struct MessageLength {
 impl MessageLength {
     // internal function so we can determine length_length from new
     pub fn encode_internal(message_length: usize) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        match message_length {
-            usize::MIN..=127 => {
-                bytes.push(message_length as u8);
-            }
-            128..=255 => {
-                // one byte
-                bytes.push(0x81);
-                bytes.push(message_length as u8);
-            }
-            256..=65_535 => {
-                // two bytes
-                bytes.push(0x82);
-                let be_bytes = message_length.to_be_bytes();
-                let last_two_bytes = &be_bytes[be_bytes.len() - 2..=be_bytes.len() - 1];
-                bytes.extend_from_slice(last_two_bytes);
-            }
-            65_536..=16_777_215 => {
-                // three bytes
-                bytes.push(0x83);
-                let be_bytes = message_length.to_be_bytes();
-                let last_three_bytes = &be_bytes[be_bytes.len() - 3..=be_bytes.len() - 1];
-                bytes.extend_from_slice(last_three_bytes);
-            }
-            16_777_216..=4_294_967_295 => {
-                // four bytes
-                bytes.push(0x84);
-                let be_bytes = message_length.to_be_bytes();
-                let last_four_bytes = &be_bytes[be_bytes.len() - 4..=be_bytes.len() - 1];
-                bytes.extend_from_slice(last_four_bytes);
-            }
-            4_294_967_296..=1_099_511_627_775 => {
-                // five bytes
-                bytes.push(0x85);
-                let be_bytes = message_length.to_be_bytes();
-                let last_five_bytes = &be_bytes[be_bytes.len() - 5..=be_bytes.len() - 1];
-                bytes.extend_from_slice(last_five_bytes);
-            }
-            1_099_511_627_776..=281_474_976_710_655 => {
-                // six bytes
-                bytes.push(0x86);
-                let be_bytes = message_length.to_be_bytes();
-                let last_six_bytes = &be_bytes[be_bytes.len() - 6..=be_bytes.len() - 1];
-                bytes.extend_from_slice(last_six_bytes);
-            }
-            281_474_976_710_656..=72_057_594_037_927_935 => {
-                // seven bytes
-                bytes.push(0x87);
-                let be_bytes = message_length.to_be_bytes();
-                let last_seven_bytes = &be_bytes[be_bytes.len() - 7..=be_bytes.len() - 1];
-                bytes.extend_from_slice(last_seven_bytes);
-            }
-            72_057_594_037_927_936..=usize::MAX => {
-                // eight bytes
-                bytes.push(0x88);
-                let be_bytes = message_length.to_be_bytes();
-                bytes.extend_from_slice(&be_bytes);
-            }
-            // when we go to 128-bit machines, more branches might be needed here
-            _ => {
-                panic!("Out of bounds MessageLength representation!");
-            }
+        if message_length <= 127 {
+            return vec![message_length as u8];
         }
+        let be_bytes = message_length.to_be_bytes();
+        let first_nonzero = be_bytes
+            .iter()
+            .position(|&b| b != 0)
+            .unwrap_or(be_bytes.len().saturating_sub(1));
+        let sig_bytes = &be_bytes[first_nonzero..];
+        let mut bytes = Vec::with_capacity(1 + sig_bytes.len());
+        bytes.push(0x80u8 | (sig_bytes.len() as u8));
+        bytes.extend_from_slice(sig_bytes);
         bytes
     }
 
@@ -119,52 +82,64 @@ impl MessageLength {
         MessageLength::encode_internal(self.message_length)
     }
 
-    pub fn decode(bytes: &[u8]) -> Option<Decoded<Self>> {
-        match bytes.first() {
-            Some(b_0) => {
-                if b_0 <= &127 {
-                    // BER short form
-                    Some(Decoded::new(
-                        MessageLength {
-                            length_length: 1,
-                            message_length: *b_0 as usize,
-                        },
-                        1,
-                    ))
-                } else {
-                    // BER long form
-                    let length_byte_count = (b_0 & 0x7F) as usize;
-                    if length_byte_count > 8 {
-                        // Unlikely, but we do not have a way to represent this:
-                        // usize MAX is (1 << 64) - 1
-                        return None;
-                    }
-                    match bytes.get(1..=length_byte_count) {
-                        Some(b_x) => {
-                            //println!("b_x is {:?}", b_x);
-                            let mut value: usize = 0;
-                            for b in b_x {
-                                //println!("b is {}, value is {}", b, value);
-                                value = (value << 8) | (*b as usize);
-                                //println!("value is now {}", value);
-                            }
-                            let length_len = length_byte_count + 1;
-
-                            Some(Decoded::new(
-                                MessageLength {
-                                    length_length: length_len,
-                                    message_length: value,
-                                },
-                                length_len,
-                            ))
-                        }
-                        // Why couldn't we get the slice?
-                        // Is the data corrupted?
-                        None => None,
-                    }
-                }
+    fn decode_checked(bytes: &[u8], max_length: usize) -> DecodeLengthStatus {
+        let Some(&b_0) = bytes.first() else {
+            return DecodeLengthStatus::Incomplete;
+        };
+        if b_0 <= 127 {
+            let value = b_0 as usize;
+            if value > max_length {
+                return DecodeLengthStatus::Invalid(format!(
+                    "Encrypted frame length {value} exceeds maximum allowed size ({max_length} bytes)"
+                ));
             }
-            None => None,
+            return DecodeLengthStatus::Complete(Decoded::new(
+                MessageLength {
+                    length_length: 1,
+                    message_length: value,
+                },
+                1,
+            ));
+        }
+
+        let length_byte_count = (b_0 & 0x7F) as usize;
+        if length_byte_count == 0 {
+            return DecodeLengthStatus::Invalid(
+                "Indefinite-length BER encoding (0x80) is not supported".to_string(),
+            );
+        }
+        if length_byte_count > 8 || length_byte_count > std::mem::size_of::<usize>() {
+            return DecodeLengthStatus::Invalid(format!(
+                "BER message length byte count {length_byte_count} exceeds maximum supported size"
+            ));
+        }
+        let Some(b_x) = bytes.get(1..=length_byte_count) else {
+            return DecodeLengthStatus::Incomplete;
+        };
+
+        let mut value: usize = 0;
+        for &b in b_x {
+            value = (value << 8) | (b as usize);
+        }
+        if value > max_length {
+            return DecodeLengthStatus::Invalid(format!(
+                "Encrypted frame length {value} exceeds maximum allowed size ({max_length} bytes)"
+            ));
+        }
+        let length_len = length_byte_count + 1;
+        DecodeLengthStatus::Complete(Decoded::new(
+            MessageLength {
+                length_length: length_len,
+                message_length: value,
+            },
+            length_len,
+        ))
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Decoded<Self>> {
+        match Self::decode_checked(bytes, usize::MAX) {
+            DecodeLengthStatus::Complete(decoded) => Some(decoded),
+            DecodeLengthStatus::Incomplete | DecodeLengthStatus::Invalid(_) => None,
         }
     }
 }
@@ -559,18 +534,130 @@ fn test_length_encode_decode_roundrobin() {
 fn test_encrypt_decrypt() {
     let key = EncryptionKey::generate();
     let mut encryptor = StreamEncryptor::new(key.clone()).unwrap();
-    let mut decryptor = StreamDecryptor::new(key.clone()).unwrap();
+    let mut decryptor = StreamDecryptor::new(key).unwrap();
 
-    let plain = "There once was a ship that put to sea; The name of the ship was the Billy of Tea; The winds blew up, her bow dipped down; blow, me bully boys, blow.".to_string();
-    let mut plain_clone = plain.clone(); // keep original to compare against
-    let mut cipher = encryptor
-        .encrypt(unsafe { plain_clone.as_mut_vec() })
-        .unwrap();
+    let plain = "There once was a ship that put to sea; The name of the ship was the Billy of Tea; The winds blew up, her bow dipped down; blow, me bully boys, blow.";
+    let mut plain_bytes = plain.as_bytes().to_vec();
+    let mut cipher = encryptor.encrypt(&mut plain_bytes).unwrap();
+    cipher.extend_from_slice(&encryptor.finish().unwrap());
     let plain2 = String::from_utf8(decryptor.decrypt(&mut cipher).unwrap()).unwrap();
+    decryptor.finish(&cipher).unwrap();
     assert_eq!(plain, plain2);
 }
 
+#[test]
+fn test_decrypt_rejects_overflow_and_oversized_frame_lengths() {
+    let key = EncryptionKey::generate();
+    let mut decryptor = StreamDecryptor::new(key.clone()).unwrap();
+
+    // Crafted v2 header claiming usize::MAX length (0x88 + 8 * 0xFF)
+    let mut crafted_v2 = MESSAGE_START_V2.to_vec();
+    crafted_v2.push(FRAME_TYPE_DATA);
+    crafted_v2.push(0x88);
+    crafted_v2.extend_from_slice(&[0xFF; 8]);
+    assert!(decryptor.decrypt(&mut crafted_v2).is_err());
+
+    // Crafted v2 header exceeding MAX_CIPHER_FRAME_LEN (0x84 + 0x05_00_00_00 = 80 MiB)
+    let mut oversized_v2 = MESSAGE_START_V2.to_vec();
+    oversized_v2.push(FRAME_TYPE_DATA);
+    oversized_v2.push(0x84);
+    oversized_v2.extend_from_slice(&[0x05, 0x00, 0x00, 0x00]);
+    let mut decryptor_oversized = StreamDecryptor::new(key.clone()).unwrap();
+    assert!(decryptor_oversized.decrypt(&mut oversized_v2).is_err());
+
+    // Crafted legacy v1 header claiming usize::MAX with legacy enabled must also fail without panic
+    let mut crafted_v1 = MESSAGE_START.to_vec();
+    crafted_v1.push(0x88);
+    crafted_v1.extend_from_slice(&[0xFF; 8]);
+    let mut decryptor_v1 = StreamDecryptor::new_with_legacy(key, true).unwrap();
+    assert!(decryptor_v1.decrypt(&mut crafted_v1).is_err());
+}
+
+#[test]
+fn test_decrypt_handles_split_multibyte_ber_length_header() {
+    let key = EncryptionKey::generate();
+    let mut encryptor = StreamEncryptor::new(key.clone()).unwrap();
+    let mut decryptor = StreamDecryptor::new(key).unwrap();
+
+    // 300 bytes produces a 2-byte BER long-form length (0x82, 0x01, 0x3C)
+    let original = vec![b'A'; 300];
+    let mut plain = original.clone();
+    let mut cipher = encryptor.encrypt(&mut plain).unwrap();
+    cipher.extend_from_slice(&encryptor.finish().unwrap());
+
+    // Feed 1 byte at a time so multi-byte header splits across reads
+    let mut buffer = Vec::new();
+    let mut recovered = Vec::new();
+    for &byte in &cipher {
+        buffer.push(byte);
+        let chunk = decryptor.decrypt(&mut buffer).unwrap();
+        recovered.extend_from_slice(&chunk);
+    }
+    decryptor.finish(&buffer).unwrap();
+    assert_eq!(recovered, original);
+}
+
+#[test]
+fn test_decrypt_detects_truncation_and_trailing_data() {
+    let key = EncryptionKey::generate();
+    let mut encryptor = StreamEncryptor::new(key.clone()).unwrap();
+    let mut data = b"chunk one".to_vec();
+    let frame1 = encryptor.encrypt(&mut data).unwrap();
+    let mut eof_frame = encryptor.finish().unwrap();
+
+    // 1. Clean frame-boundary truncation (missing EndOfStream frame) must fail finish()
+    let mut trunc_decryptor = StreamDecryptor::new(key.clone()).unwrap();
+    let mut only_frame1 = frame1.clone();
+    assert_eq!(
+        trunc_decryptor.decrypt(&mut only_frame1).unwrap(),
+        b"chunk one"
+    );
+    assert!(trunc_decryptor.finish(&only_frame1).is_err());
+
+    // 2. Complete empty stream with only finish() frame succeeds
+    let mut empty_enc = StreamEncryptor::new(key.clone()).unwrap();
+    let mut empty_eof = empty_enc.finish().unwrap();
+    let mut empty_dec = StreamDecryptor::new(key.clone()).unwrap();
+    assert!(empty_dec.decrypt(&mut empty_eof).unwrap().is_empty());
+    assert!(empty_dec.finish(&empty_eof).is_ok());
+
+    // 3. Zero-byte completely truncated stream must fail finish() in v2 mode
+    let mut zero_dec = StreamDecryptor::new(key.clone()).unwrap();
+    assert!(zero_dec.finish(&[]).is_err());
+
+    // 4. Trailing injected bytes after authenticated EndOfStream must fail
+    let mut full = frame1;
+    full.append(&mut eof_frame);
+    full.extend_from_slice(b"extra");
+    let mut trailing_dec = StreamDecryptor::new(key).unwrap();
+    assert!(trailing_dec.decrypt(&mut full).is_err());
+}
+
+#[test]
+fn test_decrypt_rejects_legacy_v1_unless_opted_in() {
+    let key = EncryptionKey::generate();
+    // Construct a synthetic legacy v1 ciphertext frame using encrypt_next without AAD
+    let aead = XChaCha20Poly1305::new_from_slice(&key.key).unwrap();
+    let mut raw_enc = EncryptorBE32::from_aead(aead, &key.nonce.into());
+    let mut v1_cipher = raw_enc.encrypt_next(b"legacy payload".as_slice()).unwrap();
+    let mut v1_framed = MESSAGE_START.to_vec();
+    v1_framed.append(&mut MessageLength::new(v1_cipher.len()).encode());
+    v1_framed.append(&mut v1_cipher);
+
+    let mut strict_dec = StreamDecryptor::new(key.clone()).unwrap();
+    let mut strict_input = v1_framed.clone();
+    assert!(strict_dec.decrypt(&mut strict_input).is_err());
+
+    let mut legacy_dec = StreamDecryptor::new_with_legacy(key, true).unwrap();
+    let out = legacy_dec.decrypt(&mut v1_framed).unwrap();
+    legacy_dec.finish(&v1_framed).unwrap();
+    assert_eq!(out, b"legacy payload");
+}
+
 /// Stateful streaming AEAD encryptor backed by [`XChaCha20Poly1305`] and [`EncryptorBE32`].
+///
+/// Emits v2 framed chunks with AAD-authenticated headers and a final authenticated
+/// end-of-stream marker via [`StreamEncryptor::finish`].
 ///
 /// # Examples
 ///
@@ -582,14 +669,16 @@ fn test_encrypt_decrypt() {
 /// let key = EncryptionKey::generate();
 /// let mut encryptor = StreamEncryptor::new(key)?;
 /// let mut plaintext = b"hello world".to_vec();
-/// let ciphertext = encryptor.encrypt(&mut plaintext)?;
+/// let mut ciphertext = encryptor.encrypt(&mut plaintext)?;
+/// ciphertext.extend_from_slice(&encryptor.finish()?);
 /// assert!(!ciphertext.is_empty());
 /// assert!(plaintext.is_empty());
 /// # Ok(())
 /// # }
 /// ```
 pub struct StreamEncryptor {
-    encryptor: EncryptorBE32<XChaCha20Poly1305>,
+    encryptor: Option<EncryptorBE32<XChaCha20Poly1305>>,
+    finished: bool,
 }
 
 impl StreamEncryptor {
@@ -602,7 +691,10 @@ impl StreamEncryptor {
         match XChaCha20Poly1305::new_from_slice(&encryption_key.key) {
             Ok(aead) => {
                 let encryptor = EncryptorBE32::from_aead(aead, &encryption_key.nonce.into());
-                Ok(Self { encryptor })
+                Ok(Self {
+                    encryptor: Some(encryptor),
+                    finished: false,
+                })
             }
             Err(error) => {
                 let error_message = format!("Error initializing StreamEncryptor: {error}");
@@ -612,38 +704,102 @@ impl StreamEncryptor {
         }
     }
 
-    /// Encrypts the next chunk in the stream and frames it with [`MESSAGE_START`] and [`MessageLength`].
+    fn build_v2_header(frame_type: u8, cipher_len: usize) -> Vec<u8> {
+        let len_bytes = MessageLength::new(cipher_len).encode();
+        let mut header = Vec::with_capacity(MESSAGE_START_LENGTH + 1 + len_bytes.len());
+        header.extend_from_slice(&MESSAGE_START_V2[..]);
+        header.push(frame_type);
+        header.extend_from_slice(&len_bytes);
+        header
+    }
+
+    /// Encrypts the next chunk(s) in the stream using v2 framing and AAD-bound headers.
     ///
-    /// Note that this consumes the contents of `clear_data`.
+    /// Consumes and zeroizes `clear_data`. Oversized inputs are automatically split into
+    /// bounded frames up to [`MAX_CIPHER_FRAME_LEN`] bytes.
     ///
     /// # Errors
     ///
-    /// Returns [`DatapipeError::EncryptionError`] if AEAD stream encryption fails.
+    /// Returns [`DatapipeError::EncryptionError`] if the stream has already been finalized
+    /// via [`finish`](Self::finish) or if AEAD stream encryption fails.
     pub fn encrypt(&mut self, clear_data: &mut Vec<u8>) -> Result<Vec<u8>, DatapipeError> {
         let clear_data_length = clear_data.len();
         trace!("clear_data length is: {clear_data_length}");
-        if clear_data.is_empty() {
-            Ok(Vec::new())
-        } else {
-            let mut message = Vec::new();
-            message.extend_from_slice(&MESSAGE_START[..]);
-            let payload: Vec<u8> = std::mem::take(clear_data);
-            let mut cipher_data = self.encryptor.encrypt_next(&payload[..])?;
-            let cipher_data_message_length = MessageLength::new(cipher_data.len());
-            message.append(&mut cipher_data_message_length.encode());
-            message.append(&mut cipher_data);
-            Ok(message)
+        if self.finished {
+            return Err(DatapipeError::EncryptionError(
+                "Cannot encrypt data after StreamEncryptor has been finalized".to_string(),
+            ));
         }
+        if clear_data.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let Some(ref mut encryptor) = self.encryptor else {
+            return Err(DatapipeError::EncryptionError(
+                "StreamEncryptor internal cipher state missing".to_string(),
+            ));
+        };
+
+        let mut payload: Vec<u8> = std::mem::take(clear_data);
+        let mut out = Vec::new();
+        for chunk in payload.chunks(MAX_PLAINTEXT_CHUNK_LEN) {
+            let expected_cipher_len = chunk.len() + AEAD_TAG_LENGTH;
+            let header = Self::build_v2_header(FRAME_TYPE_DATA, expected_cipher_len);
+            let mut cipher_data = encryptor.encrypt_next(Payload {
+                msg: chunk,
+                aad: &header,
+            })?;
+            out.extend_from_slice(&header);
+            out.append(&mut cipher_data);
+        }
+        payload.fill(0);
+        std::hint::black_box(&payload);
+        Ok(out)
+    }
+
+    /// Finalizes the encrypted stream by emitting an authenticated `EndOfStream` frame
+    /// (`encrypt_last`). Calling `finish` after already finalized returns an empty buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatapipeError::EncryptionError`] if finalizing AEAD encryption fails.
+    pub fn finish(&mut self) -> Result<Vec<u8>, DatapipeError> {
+        if self.finished {
+            return Ok(Vec::new());
+        }
+        self.finished = true;
+        let Some(encryptor) = self.encryptor.take() else {
+            return Ok(Vec::new());
+        };
+        let header = Self::build_v2_header(FRAME_TYPE_LAST, AEAD_TAG_LENGTH);
+        let mut cipher_data = encryptor.encrypt_last(Payload {
+            msg: &[],
+            aad: &header,
+        })?;
+        let mut out = Vec::with_capacity(header.len() + cipher_data.len());
+        out.extend_from_slice(&header);
+        out.append(&mut cipher_data);
+        Ok(out)
     }
 }
 
 impl std::fmt::Debug for StreamEncryptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        f.debug_struct("StreamEncryptor").finish()
+        f.debug_struct("StreamEncryptor")
+            .field("finished", &self.finished)
+            .finish()
     }
 }
 
+enum DecryptFrameStep {
+    NeedMoreData,
+    Frame(Vec<u8>),
+}
+
 /// Stateful streaming AEAD decryptor backed by [`XChaCha20Poly1305`] and [`DecryptorBE32`].
+///
+/// By default, enforces v2 framing with authenticated end-of-stream verification and rejects
+/// unauthenticated legacy v1 streams unless constructed with [`StreamDecryptor::new_with_legacy`].
 ///
 /// # Examples
 ///
@@ -658,26 +814,53 @@ impl std::fmt::Debug for StreamEncryptor {
 ///
 /// let mut plaintext = b"hello world".to_vec();
 /// let mut ciphertext = encryptor.encrypt(&mut plaintext)?;
+/// ciphertext.extend_from_slice(&encryptor.finish()?);
 /// let decrypted = decryptor.decrypt(&mut ciphertext)?;
+/// decryptor.finish(&ciphertext)?;
 /// assert_eq!(decrypted, b"hello world");
 /// # Ok(())
 /// # }
 /// ```
 pub struct StreamDecryptor {
-    decryptor: DecryptorBE32<XChaCha20Poly1305>,
+    decryptor: Option<DecryptorBE32<XChaCha20Poly1305>>,
+    allow_legacy_v1: bool,
+    saw_v2: bool,
+    saw_v1: bool,
+    eof_verified: bool,
 }
 
 impl StreamDecryptor {
-    /// Creates a new [`StreamDecryptor`] from the provided [`EncryptionKey`].
+    /// Creates a strict [`StreamDecryptor`] requiring v2 framing and authenticated EOF.
     ///
     /// # Errors
     ///
     /// Returns [`DatapipeError::ValidationError`] if the key slice length is invalid.
     pub fn new(encryption_key: EncryptionKey) -> Result<Self, DatapipeError> {
+        Self::new_with_legacy(encryption_key, false)
+    }
+
+    /// Creates a [`StreamDecryptor`] with explicit control over legacy v1 stream compatibility.
+    ///
+    /// Legacy v1 streams lack AAD header authentication and an authenticated EOF marker,
+    /// so `allow_legacy_v1` should be `false` unless decrypting legacy archives.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatapipeError::ValidationError`] if the key slice length is invalid.
+    pub fn new_with_legacy(
+        encryption_key: EncryptionKey,
+        allow_legacy_v1: bool,
+    ) -> Result<Self, DatapipeError> {
         match XChaCha20Poly1305::new_from_slice(&encryption_key.key) {
             Ok(aead) => {
                 let decryptor = DecryptorBE32::from_aead(aead, &encryption_key.nonce.into());
-                Ok(Self { decryptor })
+                Ok(Self {
+                    decryptor: Some(decryptor),
+                    allow_legacy_v1,
+                    saw_v2: false,
+                    saw_v1: false,
+                    eof_verified: false,
+                })
             }
             Err(error) => {
                 let error_message = format!("Error initializing StreamDecryptor: {error}");
@@ -686,47 +869,175 @@ impl StreamDecryptor {
         }
     }
 
-    /// note that this consumes the some of the contents of cipher_data
-    fn decrypt_one(&mut self, cipher_data: &mut Vec<u8>) -> Result<Vec<u8>, DatapipeError> {
+    fn decrypt_v2_frame(
+        &mut self,
+        cipher_data: &mut Vec<u8>,
+    ) -> Result<DecryptFrameStep, DatapipeError> {
+        if self.saw_v1 {
+            return Err(DatapipeError::EncryptionError(
+                "Mixed legacy v1 and v2 encrypted frames in stream".to_string(),
+            ));
+        }
+        let cipher_data_length = cipher_data.len();
+        if cipher_data_length < MIN_PREFIX_LENGTH_V2 {
+            return Ok(DecryptFrameStep::NeedMoreData);
+        }
+
+        let frame_type = cipher_data[MESSAGE_START_LENGTH];
+        if frame_type != FRAME_TYPE_DATA && frame_type != FRAME_TYPE_LAST {
+            let error_message = format!("Unknown encrypted frame type: 0x{frame_type:02x}");
+            error!("{error_message}");
+            return Err(DatapipeError::EncryptionError(error_message));
+        }
+
+        let length_offset = MESSAGE_START_LENGTH + 1;
+        let message_length = match MessageLength::decode_checked(
+            &cipher_data[length_offset..],
+            MAX_CIPHER_FRAME_LEN,
+        ) {
+            DecodeLengthStatus::Complete(decoded) => decoded.decoded,
+            DecodeLengthStatus::Incomplete => return Ok(DecryptFrameStep::NeedMoreData),
+            DecodeLengthStatus::Invalid(msg) => {
+                error!("{msg}");
+                return Err(DatapipeError::EncryptionError(msg));
+            }
+        };
+
+        let start = length_offset
+            .checked_add(message_length.length_length)
+            .ok_or_else(|| {
+                DatapipeError::EncryptionError("Encrypted frame header offset overflow".to_string())
+            })?;
+        let end = start
+            .checked_add(message_length.message_length)
+            .ok_or_else(|| {
+                DatapipeError::EncryptionError("Encrypted frame total length overflow".to_string())
+            })?;
+        if end > cipher_data_length {
+            return Ok(DecryptFrameStep::NeedMoreData);
+        }
+
+        let message: Vec<u8> = cipher_data.drain(0..end).collect();
+        trace!(
+            "Draining {end} bytes from cipher_data; cipher_data length is now: {}",
+            cipher_data.len()
+        );
+        let aad = &message[..start];
+        let payload = Payload {
+            msg: &message[start..end],
+            aad,
+        };
+
+        self.saw_v2 = true;
+        if frame_type == FRAME_TYPE_DATA {
+            let Some(ref mut decryptor) = self.decryptor else {
+                return Err(DatapipeError::EncryptionError(
+                    "Encrypted data frame received after stream end".to_string(),
+                ));
+            };
+            let clear_data = decryptor.decrypt_next(payload)?;
+            Ok(DecryptFrameStep::Frame(clear_data))
+        } else {
+            let Some(decryptor) = self.decryptor.take() else {
+                return Err(DatapipeError::EncryptionError(
+                    "Duplicate encrypted end-of-stream frame received".to_string(),
+                ));
+            };
+            let clear_data = decryptor.decrypt_last(payload)?;
+            self.eof_verified = true;
+            if !cipher_data.is_empty() {
+                return Err(DatapipeError::EncryptionError(
+                    "Unexpected trailing bytes after encrypted end-of-stream".to_string(),
+                ));
+            }
+            Ok(DecryptFrameStep::Frame(clear_data))
+        }
+    }
+
+    fn decrypt_v1_frame(
+        &mut self,
+        cipher_data: &mut Vec<u8>,
+    ) -> Result<DecryptFrameStep, DatapipeError> {
+        if !self.allow_legacy_v1 {
+            let error_message = "Legacy v1 encrypted stream without authenticated end-of-stream is rejected; pass --decrypt-allow-legacy if decrypting legacy ciphertext".to_string();
+            error!("{error_message}");
+            return Err(DatapipeError::EncryptionError(error_message));
+        }
+        if self.saw_v2 {
+            return Err(DatapipeError::EncryptionError(
+                "Mixed v2 and legacy v1 encrypted frames in stream".to_string(),
+            ));
+        }
+        let cipher_data_length = cipher_data.len();
+        if cipher_data_length < MIN_PREFIX_LENGTH_V1 {
+            return Ok(DecryptFrameStep::NeedMoreData);
+        }
+
+        let message_length = match MessageLength::decode_checked(
+            &cipher_data[MESSAGE_START_LENGTH..],
+            MAX_CIPHER_FRAME_LEN,
+        ) {
+            DecodeLengthStatus::Complete(decoded) => decoded.decoded,
+            DecodeLengthStatus::Incomplete => return Ok(DecryptFrameStep::NeedMoreData),
+            DecodeLengthStatus::Invalid(msg) => {
+                error!("{msg}");
+                return Err(DatapipeError::EncryptionError(msg));
+            }
+        };
+
+        let start = MESSAGE_START_LENGTH
+            .checked_add(message_length.length_length)
+            .ok_or_else(|| {
+                DatapipeError::EncryptionError("Encrypted frame header offset overflow".to_string())
+            })?;
+        let end = start
+            .checked_add(message_length.message_length)
+            .ok_or_else(|| {
+                DatapipeError::EncryptionError("Encrypted frame total length overflow".to_string())
+            })?;
+        if end > cipher_data_length {
+            return Ok(DecryptFrameStep::NeedMoreData);
+        }
+
+        let message: Vec<u8> = cipher_data.drain(0..end).collect();
+        let Some(ref mut decryptor) = self.decryptor else {
+            return Err(DatapipeError::EncryptionError(
+                "StreamDecryptor already finalized".to_string(),
+            ));
+        };
+        let clear_data = decryptor.decrypt_next(&message[start..end])?;
+        self.saw_v1 = true;
+        Ok(DecryptFrameStep::Frame(clear_data))
+    }
+
+    /// Note that this consumes complete framed messages from `cipher_data`.
+    fn decrypt_one(
+        &mut self,
+        cipher_data: &mut Vec<u8>,
+    ) -> Result<DecryptFrameStep, DatapipeError> {
         let cipher_data_length = cipher_data.len();
         trace!("cipher_data length is: {cipher_data_length}");
-        if cipher_data_length >= MIN_PREFIX_LENGTH {
-            if cipher_data[0..MESSAGE_START_LENGTH] == MESSAGE_START {
-                match MessageLength::decode(&cipher_data[MESSAGE_START_LENGTH..]) {
-                    Some(decoded_length) => {
-                        let message_length = decoded_length.decoded;
-                        let start = MESSAGE_START_LENGTH + message_length.length_length;
-                        let end = start + message_length.message_length;
-                        if end > cipher_data_length {
-                            // incomplete cipher data; wait for more data to arrive
-                            return Ok(Vec::new());
-                        }
-                        let message: Vec<u8> = cipher_data.drain(0..end).collect();
-                        trace!(
-                            "Draining {end} bytes from cipher_data; cipher_data length is now: {}",
-                            cipher_data.len()
-                        );
-                        let clear_data = self.decryptor.decrypt_next(&message[start..end])?;
-                        Ok(clear_data)
-                    }
-                    None => {
-                        let error_message =
-                            "Could not decode encrypted message length!".to_string();
-                        error!("{error_message}");
-                        Err(DatapipeError::EncryptionError(error_message))
-                    }
-                }
-            } else {
-                // MESSAGE_START does not match
-                let error_message = "Encrypted message start sequence does not match!".to_string();
-                error!("{error_message}");
-                Err(DatapipeError::EncryptionError(error_message))
+        if self.eof_verified && cipher_data_length > 0 {
+            return Err(DatapipeError::EncryptionError(
+                "Unexpected trailing bytes after encrypted end-of-stream".to_string(),
+            ));
+        }
+        if cipher_data_length < MESSAGE_START_LENGTH {
+            if cipher_data_length > 0 {
+                warn!("Encrypted message header is incomplete; buffering more bytes");
             }
+            return Ok(DecryptFrameStep::NeedMoreData);
+        }
+
+        let magic = &cipher_data[0..MESSAGE_START_LENGTH];
+        if magic == MESSAGE_START_V2 {
+            self.decrypt_v2_frame(cipher_data)
+        } else if magic == MESSAGE_START {
+            self.decrypt_v1_frame(cipher_data)
         } else {
-            // cipher_data is too short
-            let warn_message = "Encrypted message is too short to decrypt!".to_string();
-            warn!("{warn_message}");
-            Ok(Vec::new())
+            let error_message = "Encrypted message start sequence does not match!".to_string();
+            error!("{error_message}");
+            Err(DatapipeError::EncryptionError(error_message))
         }
     }
 
@@ -737,24 +1048,47 @@ impl StreamDecryptor {
     ///
     /// # Errors
     ///
-    /// Returns [`DatapipeError::EncryptionError`] if frame headers are malformed or AEAD
-    /// authentication/decryption fails.
+    /// Returns [`DatapipeError::EncryptionError`] if frame headers are malformed, unexpected
+    /// trailing bytes follow EOF, legacy v1 streams are disallowed, or AEAD authentication fails.
     pub fn decrypt(&mut self, cipher_data: &mut Vec<u8>) -> Result<Vec<u8>, DatapipeError> {
         let mut clear_data: Vec<u8> = Vec::new();
-        loop {
-            let mut one_clear_data = self.decrypt_one(cipher_data)?;
-            if one_clear_data.is_empty() {
-                break;
-            } else {
-                clear_data.append(&mut one_clear_data);
-            }
+        while let DecryptFrameStep::Frame(mut chunk) = self.decrypt_one(cipher_data)? {
+            clear_data.append(&mut chunk);
         }
         Ok(clear_data)
+    }
+
+    /// Verifies that no trailing incomplete ciphertext remains and, for v2 streams,
+    /// confirms that an authenticated end-of-stream frame was received.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatapipeError::EncryptionError`] if unconsumed ciphertext bytes remain or
+    /// if the v2 stream was truncated before its authenticated end-of-stream marker.
+    pub fn finish(&mut self, remaining_cipher_data: &[u8]) -> Result<(), DatapipeError> {
+        if !remaining_cipher_data.is_empty() {
+            let error_message = format!(
+                "Encrypted stream truncated mid-frame ({} unconsumed trailing bytes)",
+                remaining_cipher_data.len()
+            );
+            error!("{error_message}");
+            return Err(DatapipeError::EncryptionError(error_message));
+        }
+        if !self.eof_verified && !(self.allow_legacy_v1 && !self.saw_v2) {
+            let error_message =
+                "Encrypted stream ended before authenticated end-of-stream marker".to_string();
+            error!("{error_message}");
+            return Err(DatapipeError::EncryptionError(error_message));
+        }
+        Ok(())
     }
 }
 
 impl std::fmt::Debug for StreamDecryptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        f.debug_struct("StreamDecryptor").finish()
+        f.debug_struct("StreamDecryptor")
+            .field("allow_legacy_v1", &self.allow_legacy_v1)
+            .field("eof_verified", &self.eof_verified)
+            .finish()
     }
 }

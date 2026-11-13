@@ -1,6 +1,6 @@
-/// wrapper for logging implementation
-/// use the standard log crate interface and wrap the log4rs for the implementation
-use log::{LevelFilter, SetLoggerError};
+//! Logging wrapper around `log` and `log4rs`.
+use crate::datapipe_types::{DatapipeError, error_root_cause};
+use log::LevelFilter;
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::rolling_file::policy::compound::CompoundPolicy;
 use log4rs::append::rolling_file::policy::compound::roll::fixed_window::FixedWindowRoller;
@@ -13,102 +13,129 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
-/// max size of log file before rolling to next one
-const TRIGGER_FILE_SIZE: u64 = 20 * 1024 * 1024; // 2 MB
+/// Max size of log file before rolling to next one (20 MB).
+const TRIGGER_FILE_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
 
-/// max number of archive log files to keep
+/// Max number of archive log files to keep.
 const LOG_FILE_COUNT: u32 = 1;
 
-/// log entry pattern
+/// Log entry pattern.
 const LOG_ENTRY_PATTERN: &str = "{d} [{l}] {f}:{L} {m}\n";
 
-/// log level to use
+/// Log level to use.
 const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Info;
 
-/// this logger struct is returned to the application
+/// Logger handle returned to the application, cleaning up temporary logs on drop unless `keep_logs` is true.
 pub struct Logger {
-    /// where the log files will be written
+    /// Directory where log files are written.
     pub log_directory: PathBuf,
-    /// the prefix of the log files
+    /// Active log file path.
     pub log_path: PathBuf,
-    /// the prefix of the archive log files
+    /// Prefix of rolled archive log files.
     pub archive_prefix: String,
-    /// the logger handle can be used to change the logger settings on the fly if wanted
+    /// Underlying `log4rs` handle used to update logger settings dynamically.
     pub handle: Handle,
-    /// should logs be kept when the program exits?
+    /// Whether log files should be retained when this `Logger` is dropped.
     pub keep_logs: bool,
 }
 
-// deleting log files on exit is handled by a custom drop function
+impl std::fmt::Debug for Logger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Logger")
+            .field("log_directory", &self.log_directory)
+            .field("log_path", &self.log_path)
+            .field("archive_prefix", &self.archive_prefix)
+            .field("keep_logs", &self.keep_logs)
+            .finish_non_exhaustive()
+    }
+}
+
+// Deleting log files on exit is handled by a custom drop implementation.
 impl Drop for Logger {
     fn drop(&mut self) {
         if !self.keep_logs {
             silence(&mut self.handle);
-            // delete log files
-            for maybe_entry in fs::read_dir(&self.log_directory).unwrap() {
-                let entry = maybe_entry.unwrap();
-                let entry_path = entry.path();
-                // note that Path.starts_with treats filenames with extensions differently from str.starts_with
-                // Path.starts_with returns false unless the Path's filename matches, so we use the str.starts_with
-                // which gives the desired prefix matching behavior
-                if entry_path.is_file()
-                    && (entry_path == self.log_path
-                        || entry_path
-                            .to_str()
-                            .unwrap()
-                            .starts_with(&self.archive_prefix))
-                {
-                    fs::remove_file(entry_path).unwrap();
+            if let Ok(entries) = fs::read_dir(&self.log_directory) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    // Path::starts_with compares path components rather than filename prefixes,
+                    // so compare via to_str() when present.
+                    if entry_path.is_file()
+                        && (entry_path == self.log_path
+                            || entry_path
+                                .to_str()
+                                .is_some_and(|s| s.starts_with(&self.archive_prefix)))
+                    {
+                        let _ = fs::remove_file(entry_path);
+                    }
                 }
             }
         }
     }
 }
 
-// Silence the logger by setting logger config to console logging and maximum filtering (turn logging off)
+/// Silence the logger by switching the configuration to an `Off` threshold filter.
 pub fn silence(handle: &mut Handle) {
-    let silent_config = Config::builder()
+    if let Ok(silent_config) = Config::builder()
         .appender(
             Appender::builder()
                 .filter(Box::new(ThresholdFilter::new(log::LevelFilter::Off)))
                 .build("off", Box::new(ConsoleAppender::builder().build())),
         )
         .build(Root::builder().appender("off").build(LevelFilter::Off))
-        .unwrap();
-    handle.set_config(silent_config);
+    {
+        handle.set_config(silent_config);
+    }
 }
 
+/// Initialize the rolling file logger inside `log_directory`.
+///
+/// # Errors
+///
+/// Returns [`DatapipeError::ConfigurationError`] or [`DatapipeError::InputOutputError`]
+/// if the paths are invalid UTF-8, the log appender cannot be created, or logger initialization fails.
 pub fn init_logger(
     log_directory: &str,
     log_basename: &str,
     keep_logs: bool,
-) -> Result<Logger, SetLoggerError> {
-    // Use the process ID as part of the log filename to avoid filename conflicts when running multiple instances
+) -> Result<Logger, DatapipeError> {
+    // Use the process ID in the log filename to avoid conflicts across concurrent instances.
     let pid = process::id();
     let log_filename = format!("{}_PID{}.log", log_basename, pid);
     let archive_filename = format!("{}_PID{}_prev{{}}.log", log_basename, pid);
 
     let log_path = Path::new(log_directory).join(log_filename);
     let archive_path = Path::new(log_directory).join(archive_filename);
-    let archive_prefix = archive_path
-        .to_str()
-        .unwrap()
+    let archive_path_str = archive_path.to_str().ok_or_else(|| {
+        DatapipeError::ConfigurationError("Log archive path is not valid UTF-8".to_string())
+    })?;
+    let archive_prefix = archive_path_str
         .strip_suffix("{}.log")
-        .unwrap()
+        .ok_or_else(|| {
+            DatapipeError::ConfigurationError("Invalid log archive pattern".to_string())
+        })?
         .to_owned();
 
-    // create rolling file size policy for logger
+    // Create rolling file size policy for logger.
     let trigger = SizeTrigger::new(TRIGGER_FILE_SIZE);
     let roller = FixedWindowRoller::builder()
-        .build(archive_path.to_str().unwrap(), LOG_FILE_COUNT)
-        .unwrap();
+        .build(archive_path_str, LOG_FILE_COUNT)
+        .map_err(|err| {
+            DatapipeError::ConfigurationError(format!("Failed to configure log file roller: {err}"))
+        })?;
     let policy = CompoundPolicy::new(Box::new(trigger), Box::new(roller));
 
-    // file appender
+    // File appender.
     let logfile = log4rs::append::rolling_file::RollingFileAppender::builder()
         .encoder(Box::new(PatternEncoder::new(LOG_ENTRY_PATTERN)))
         .build(&log_path, Box::new(policy))
-        .unwrap();
+        .map_err(|err| {
+            DatapipeError::InputOutputError(format!(
+                "Failed to open log file {:?}: {}",
+                log_path,
+                error_root_cause(&err)
+            ))
+        })?;
 
     let config = Config::builder()
         .appender(
@@ -121,9 +148,13 @@ pub fn init_logger(
                 .appender("logfile")
                 .build(LevelFilter::Trace),
         )
-        .unwrap();
+        .map_err(|err| {
+            DatapipeError::ConfigurationError(format!("Failed to build log4rs config: {err}"))
+        })?;
 
-    let handle = log4rs::init_config(config)?;
+    let handle = log4rs::init_config(config).map_err(|err| {
+        DatapipeError::ConfigurationError(format!("Failed to install logger: {err}"))
+    })?;
     Ok(Logger {
         log_directory: Path::new(log_directory).to_path_buf(),
         log_path,
@@ -133,8 +164,12 @@ pub fn init_logger(
     })
 }
 
-// useful for unit tests
-pub fn init_console_logger() -> Result<Handle, SetLoggerError> {
+/// Initialize a console-only logger (useful for unit tests).
+///
+/// # Errors
+///
+/// Returns [`DatapipeError::ConfigurationError`] if the configuration or global logger setup fails.
+pub fn init_console_logger() -> Result<Handle, DatapipeError> {
     let console_config = Config::builder()
         .appender(
             Appender::builder()
@@ -153,7 +188,12 @@ pub fn init_console_logger() -> Result<Handle, SetLoggerError> {
                 .appender("console")
                 .build(LevelFilter::Trace),
         )
-        .unwrap();
-    let handle = log4rs::init_config(console_config)?;
-    Ok(handle)
+        .map_err(|err| {
+            DatapipeError::ConfigurationError(format!(
+                "Failed to build console logger config: {err}"
+            ))
+        })?;
+    log4rs::init_config(console_config).map_err(|err| {
+        DatapipeError::ConfigurationError(format!("Failed to install console logger: {err}"))
+    })
 }

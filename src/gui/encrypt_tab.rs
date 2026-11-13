@@ -1,12 +1,12 @@
 //! Encrypt tab Material Design 3 view, key generation, clipboard copy, and validation.
 
 use crate::gui::style::{
-    bottom_action_bar, compact_tonal_button, m3_card, m3_monospace_field, m3_switch,
-    nav_back_button, nav_next_button, palette, section_header, status_chip, status_chip_with_dot,
-    tonal_button,
+    bottom_action_bar, compact_tonal_button, m3_card, m3_encryption_key_status, m3_secret_field,
+    m3_switch, nav_back_button, nav_next_button, palette, section_header, status_chip,
+    status_chip_with_dot, tonal_button,
 };
 use crate::gui::types::{EncryptState, Tab};
-use egui::{CornerRadius, Frame, Layout, Margin, ProgressBar, RichText, Ui};
+use egui::{Frame, Layout, Margin, RichText, Ui};
 
 /// Renders the Encrypt stage configuration tab using Material Design 3 cards and controls.
 pub fn show_encrypt_tab(ui: &mut Ui, state: &mut EncryptState, active_tab: &mut Tab) {
@@ -54,7 +54,7 @@ pub fn show_encrypt_tab(ui: &mut Ui, state: &mut EncryptState, active_tab: &mut 
                                 );
                                 ui.label(
                                     RichText::new(
-                                        "ChaCha20-Poly1305 AEAD stream cipher (32-byte key + 19-byte nonce)",
+                                        "ChaCha20-Poly1305 AEAD stream cipher (full-entropy dpk1: / hex: / 51-byte legacy)",
                                     )
                                     .size(12.0)
                                     .color(p.on_surface_variant),
@@ -75,7 +75,7 @@ pub fn show_encrypt_tab(ui: &mut Ui, state: &mut EncryptState, active_tab: &mut 
                         ui.add_space(12.0);
 
                         ui.label(
-                            RichText::new("51-Byte UTF-8 Encryption Key")
+                            RichText::new("Encryption Key")
                                 .size(13.5)
                                 .strong()
                                 .color(if state.enabled {
@@ -89,11 +89,12 @@ pub fn show_encrypt_tab(ui: &mut Ui, state: &mut EncryptState, active_tab: &mut 
                         let copied_id = egui::Id::unique("encrypt_key_copied_at");
 
                         ui.horizontal(|ui| {
-                            let text_width = (ui.available_width() - 94.0).max(120.0);
-                            m3_monospace_field(
+                            let text_width = (ui.available_width() - 94.0).max(180.0);
+                            m3_secret_field(
                                 ui,
+                                "encrypt_key",
                                 &mut state.key,
-                                "Enter or generate a 51-character UTF-8 key...",
+                                "Enter or generate an encryption key (dpk1:...)...",
                                 text_width,
                                 state.enabled,
                             );
@@ -112,67 +113,30 @@ pub fn show_encrypt_tab(ui: &mut Ui, state: &mut EncryptState, active_tab: &mut 
                         ui.add_space(10.0);
 
                         if state.enabled {
-                            let byte_count = state.key.len();
-                            let progress = (byte_count as f32 / 51.0).clamp(0.0, 1.0);
-                            let bar_color = if byte_count == 51 {
-                                p.tertiary
-                            } else {
-                                p.error
-                            };
-
-                            ui.add(
-                                ProgressBar::new(progress)
-                                    .desired_height(6.0)
-                                    .corner_radius(CornerRadius::same(3))
-                                    .fill(bar_color),
-                            );
-
-                            ui.add_space(8.0);
-
-                            ui.horizontal_wrapped(|ui| {
-                                if byte_count == 51 {
-                                    status_chip(
-                                        ui,
-                                        "VALID (51 / 51 BYTES)",
-                                        p.tertiary_container,
-                                        p.on_tertiary_container,
-                                    );
-                                    ui.label(
-                                        RichText::new("Ready to encrypt outbound stream chunks.")
-                                            .size(12.5)
-                                            .color(p.on_surface_variant),
-                                    );
-                                } else {
-                                    status_chip(
-                                        ui,
-                                        &format!("{byte_count} / 51 BYTES"),
-                                        p.error_container,
-                                        p.on_error_container,
-                                    );
-                                    ui.label(
-                                        RichText::new("Key must be exactly 51 UTF-8 bytes.")
-                                            .size(12.5)
-                                            .color(p.error),
-                                    );
-                                }
-
-                                if let Some(copied_at) = ui.data(|d| d.get_temp::<f64>(copied_id)) {
-                                    if ui.input(|i| i.time) - copied_at < 2.0 {
-                                        status_chip_with_dot(
-                                            ui,
-                                            "COPIED TO CLIPBOARD",
-                                            p.primary_container,
-                                            p.on_primary_container,
-                                            true,
-                                        );
-                                        ui.ctx().request_repaint_after(
-                                            std::time::Duration::from_millis(250),
-                                        );
-                                    } else {
-                                        ui.data_mut(|d| d.remove::<f64>(copied_id));
+                            m3_encryption_key_status(
+                                ui,
+                                &state.key,
+                                "Ready to encrypt outbound stream chunks.",
+                                |ui| {
+                                    if let Some(copied_at) = ui.data(|d| d.get_temp::<f64>(copied_id))
+                                    {
+                                        if ui.input(|i| i.time) - copied_at < 2.0 {
+                                            status_chip_with_dot(
+                                                ui,
+                                                "COPIED TO CLIPBOARD",
+                                                p.primary_container,
+                                                p.on_primary_container,
+                                                true,
+                                            );
+                                            ui.ctx().request_repaint_after(
+                                                std::time::Duration::from_millis(250),
+                                            );
+                                        } else {
+                                            ui.data_mut(|d| d.remove::<f64>(copied_id));
+                                        }
                                     }
-                                }
-                            });
+                                },
+                            );
                         } else {
                             ui.horizontal(|ui| {
                                 status_chip(

@@ -27,9 +27,12 @@ use log::{error, info};
 use rcgen::{CertifiedKey, KeyPair, generate_simple_self_signed};
 use reqwest::{Certificate, Identity, tls::CertificateRevocationList};
 use rustls_pki_types::pem::PemObject;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls_pki_types::{
+    CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, PrivateSec1KeyDer,
+    ServerName, UnixTime,
+};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_rustls::rustls::client::WantsClientCert;
@@ -130,13 +133,13 @@ pub struct HttpsInputArgs {
 #[group(required = false, multiple = true)]
 #[serde(default)]
 pub struct TlsInputArgs {
-    /// path to custom TLS certificate chain file to use.  Certificates must be in DER format.
+    /// path to custom TLS certificate chain file to use (PEM or DER format)
     #[arg(long = "tls-input-cert-chain")]
     pub tls_input_cert_chain: Option<PathBuf>,
-    /// path to custom TLS client key to use.  Private key must be DER-encoded PKCS#1, PKCS#8, or SEC1.
+    /// path to custom TLS client key to use (PEM or DER PKCS#1, PKCS#8, or SEC1)
     #[arg(long = "tls-input-client-key")]
     pub tls_input_client_key: Option<PathBuf>,
-    /// path to custom Certificate Authority to use instead of web root CAs
+    /// path to custom Certificate Authority to use instead of web root CAs (PEM or DER format)
     #[arg(long = "tls-input-root-ca")]
     pub tls_input_root_ca: Option<PathBuf>,
     /// DANGER! Do not validate server identity.  Use with caution. DANGER!
@@ -149,10 +152,10 @@ pub struct TlsInputArgs {
 #[group(required = false, multiple = true)]
 #[serde(default)]
 pub struct TlsListenInputArgs {
-    /// path to custom TLS certificate chain file to use.  Certificates must be in DER format.
+    /// path to custom TLS certificate chain file to use (PEM or DER format)
     #[arg(long = "tls-listen-input-cert-chain")]
     pub tls_listen_input_cert_chain: Option<PathBuf>,
-    /// path to custom TLS server key to use.  Private key must be DER-encoded PKCS#1, PKCS#8, or SEC1.
+    /// path to custom TLS server key to use (PEM or DER PKCS#1, PKCS#8, or SEC1)
     #[arg(long = "tls-listen-input-server-key")]
     pub tls_listen_input_server_key: Option<PathBuf>,
     /// DANGER! Do not validate client identity.  Use with caution. DANGER!
@@ -176,7 +179,7 @@ pub struct TlsListenInputArgs {
 /// let args = IrohInputArgs::default();
 /// assert!(args.is_empty());
 /// ```
-#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Args, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
 #[serde(default)]
 pub struct IrohInputArgs {
@@ -197,6 +200,21 @@ pub struct IrohInputArgs {
     pub iroh_input_no_relay: bool,
 }
 
+impl std::fmt::Debug for IrohInputArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IrohInputArgs")
+            .field("iroh_input_addrs", &self.iroh_input_addrs)
+            .field("iroh_input_relay_url", &self.iroh_input_relay_url)
+            .field("iroh_input_alpn", &self.iroh_input_alpn)
+            .field(
+                "iroh_input_secret_key",
+                &self.iroh_input_secret_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("iroh_input_no_relay", &self.iroh_input_no_relay)
+            .finish()
+    }
+}
+
 /// Additional parameters needed for Iroh listen input (`--iroh-listen-input`)
 ///
 /// # Examples
@@ -207,7 +225,7 @@ pub struct IrohInputArgs {
 /// let args = IrohListenInputArgs::default();
 /// assert!(args.is_empty());
 /// ```
-#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Args, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
 #[serde(default)]
 pub struct IrohListenInputArgs {
@@ -231,27 +249,85 @@ pub struct IrohListenInputArgs {
     pub iroh_listen_input_no_relay: bool,
 }
 
+impl std::fmt::Debug for IrohListenInputArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IrohListenInputArgs")
+            .field(
+                "iroh_listen_input_bind_addr",
+                &self.iroh_listen_input_bind_addr,
+            )
+            .field(
+                "iroh_listen_input_secret_key",
+                &self
+                    .iroh_listen_input_secret_key
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
+            )
+            .field("iroh_listen_input_alpn", &self.iroh_listen_input_alpn)
+            .field(
+                "iroh_listen_input_relay_url",
+                &self.iroh_listen_input_relay_url,
+            )
+            .field(
+                "iroh_listen_input_allowed_peer",
+                &self.iroh_listen_input_allowed_peer,
+            )
+            .field(
+                "iroh_listen_input_no_relay",
+                &self.iroh_listen_input_no_relay,
+            )
+            .finish()
+    }
+}
+
 /// Additional parameters for decrypting input
-#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[group(required = false, multiple = false)]
+#[derive(Args, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[group(required = false, multiple = true)]
 #[serde(default)]
 pub struct DecryptionArgs {
-    /// decryption key to use after reading data; must be exactly 51 bytes long
+    /// decryption key to use after reading data (`dpk1:...`, `hex:...`, or legacy 51-byte key)
     #[arg(long = "decrypt")]
     pub decryption_key: Option<String>,
+    /// allow legacy v1 streams without authenticated EOF framing (UNSAFE against truncation)
+    #[arg(long = "decrypt-allow-legacy", default_value_t = false)]
+    pub decrypt_allow_legacy: bool,
+}
+
+impl std::fmt::Debug for DecryptionArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecryptionArgs")
+            .field(
+                "decryption_key",
+                &self.decryption_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("decrypt_allow_legacy", &self.decrypt_allow_legacy)
+            .finish()
+    }
 }
 
 /// Additional parameters for encrypting output
-#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Args, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = false)]
 #[serde(default)]
 pub struct EncryptionArgs {
-    /// encryption key to use before writing data; must be exactly 51 bytes long
+    /// encryption key to use before writing data (`dpk1:...`, `hex:...`, or legacy 51-byte key)
     #[arg(long = "encrypt")]
     pub encryption_key: Option<String>,
-    /// generate an encryption key
+    /// generate a full-entropy encryption key (printed to stderr)
     #[arg(long = "encrypt-generate-key", default_value_t = false)]
     pub generate_encryption_key: bool,
+}
+
+impl std::fmt::Debug for EncryptionArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptionArgs")
+            .field(
+                "encryption_key",
+                &self.encryption_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("generate_encryption_key", &self.generate_encryption_key)
+            .finish()
+    }
 }
 
 /// Choose one or more output destinations
@@ -340,13 +416,13 @@ pub struct HttpsOutputArgs {
 #[group(required = false, multiple = true)]
 #[serde(default)]
 pub struct TlsOutputArgs {
-    /// path to custom TLS certificate chain file to use
+    /// path to custom TLS certificate chain file to use (PEM or DER format)
     #[arg(long = "tls-output-cert-chain")]
     pub tls_output_cert_chain: Option<PathBuf>,
-    /// path to custom TLS client certificate to use
+    /// path to custom TLS client key to use (PEM or DER PKCS#1, PKCS#8, or SEC1)
     #[arg(long = "tls-output-client-key")]
     pub tls_output_client_key: Option<PathBuf>,
-    /// path to custom Certificate Authority certificates to use instead of web root CAs
+    /// path to custom Certificate Authority certificates to use instead of web root CAs (PEM or DER format)
     #[arg(long = "tls-output-root-ca")]
     pub tls_output_root_ca: Option<PathBuf>,
     /// DANGER! Do not validate server identity.  Use with caution. DANGER!
@@ -364,7 +440,7 @@ pub struct TlsOutputArgs {
 /// let args = IrohOutputArgs::default();
 /// assert!(args.is_empty());
 /// ```
-#[derive(Args, Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Args, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[group(required = false, multiple = true)]
 #[serde(default)]
 pub struct IrohOutputArgs {
@@ -383,6 +459,21 @@ pub struct IrohOutputArgs {
     /// disable default relay servers (direct IP transport only)
     #[arg(long = "iroh-output-no-relay", default_value_t = false)]
     pub iroh_output_no_relay: bool,
+}
+
+impl std::fmt::Debug for IrohOutputArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IrohOutputArgs")
+            .field("iroh_output_addrs", &self.iroh_output_addrs)
+            .field("iroh_output_relay_url", &self.iroh_output_relay_url)
+            .field("iroh_output_alpn", &self.iroh_output_alpn)
+            .field(
+                "iroh_output_secret_key",
+                &self.iroh_output_secret_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("iroh_output_no_relay", &self.iroh_output_no_relay)
+            .finish()
+    }
 }
 
 /// Logging parameters
@@ -481,7 +572,7 @@ impl TlsListenInputArgs {
 impl DecryptionArgs {
     /// Returns true if no decryption fields are configured
     pub fn is_empty(&self) -> bool {
-        self.decryption_key.is_none()
+        self.decryption_key.is_none() && !self.decrypt_allow_legacy
     }
 }
 
@@ -698,6 +789,15 @@ impl ProgramArgs {
             return Err(DatapipeError::ValidationError(error_message));
         }
 
+        if self.decryption_args.decrypt_allow_legacy
+            && self.decryption_args.decryption_key.is_none()
+        {
+            let error_message =
+                "--decrypt-allow-legacy requires --decrypt to also be specified".to_string();
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+
         if self.output.is_empty() {
             let error_message =
                 "No output destination provided! Please configure an output destination."
@@ -726,7 +826,9 @@ impl ProgramArgs {
 
     /// Prepare a reader for file input
     async fn handle_file_input(&self) -> Result<Reader, DatapipeError> {
-        let file_path = self.input.file_input.as_ref().unwrap(); // is_some checked in parent function
+        let file_path = self.input.file_input.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --file-input path".to_string())
+        })?;
         let file_reader = FileReader::new(file_path).await?;
         info!("Using FILE input");
         Ok(Reader::File(file_reader))
@@ -734,7 +836,9 @@ impl ProgramArgs {
 
     /// Prepare a reader for HTTP input
     fn handle_http_input(&self) -> Result<Reader, DatapipeError> {
-        let url = self.input.http_input.as_ref().unwrap(); // is_some checked in parent function
+        let url = self.input.http_input.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --http-input URL".to_string())
+        })?;
         let update_rate = match self.http_input.http_input_rate {
             Some(rate) => {
                 info!("Using HTTP input rate of {} milliseconds", rate);
@@ -756,10 +860,9 @@ impl ProgramArgs {
 
     /// Prepare a reader for HTTPS input
     async fn handle_https_input(&self) -> Result<Reader, DatapipeError> {
-        let url = self.input.https_input.as_ref().unwrap(); // is_some checked in parent function
-        let maybe_root_certs;
-        let maybe_crls;
-        let maybe_identity;
+        let url = self.input.https_input.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --https-input URL".to_string())
+        })?;
 
         let allow_invalid_hostnames = self.https_input.https_input_allow_invalid_hostnames;
         let allow_invalid_certs = self.https_input.https_input_allow_invalid_certificates;
@@ -769,84 +872,15 @@ impl ProgramArgs {
             None => HttpsReader::DEFAULT_READ_RATE,
         };
 
-        if self.https_input.https_input_root_certificates.is_some() {
-            let root_cert_path = self
-                .https_input
-                .https_input_root_certificates
-                .clone()
-                .unwrap();
-            let root_cert_bytes = tokio::fs::read(&root_cert_path).await?;
-            match reqwest::Certificate::from_pem_bundle(&root_cert_bytes) {
-                Ok(root_certs) => {
-                    maybe_root_certs = Some(root_certs);
-                }
-                Err(error) => {
-                    let error_message = format!(
-                        "Error getting HTTPS input root certificate at path {:?}: {}",
-                        root_cert_path,
-                        error_root_cause(&error)
-                    );
-                    error!("{error_message}");
-                    return Err(DatapipeError::InputOutputError(error_message));
-                }
-            }
-        } else {
-            maybe_root_certs = None;
-        }
-
-        if self
-            .https_input
-            .https_input_certificate_revocation_list
-            .is_some()
-        {
-            let crl_path = self
-                .https_input
+        let (maybe_root_certs, maybe_crls, maybe_identity) = load_https_tls_assets(
+            "HTTPS input",
+            self.https_input.https_input_root_certificates.as_deref(),
+            self.https_input
                 .https_input_certificate_revocation_list
-                .clone()
-                .unwrap();
-            let crl_bytes = tokio::fs::read(&crl_path).await?;
-            match reqwest::tls::CertificateRevocationList::from_pem_bundle(&crl_bytes) {
-                Ok(crls) => {
-                    maybe_crls = Some(crls);
-                }
-                Err(error) => {
-                    let error_message = format!(
-                        "Error getting HTTPS input certificate revocation list at path {:?}: {}",
-                        crl_path,
-                        error_root_cause(&error)
-                    );
-                    error!("{error_message}");
-                    return Err(DatapipeError::InputOutputError(error_message));
-                }
-            }
-        } else {
-            maybe_crls = None;
-        }
-
-        if self.https_input.https_input_client_identity.is_some() {
-            let identity_path = self
-                .https_input
-                .https_input_client_identity
-                .clone()
-                .unwrap();
-            let identity_bytes = tokio::fs::read(&identity_path).await?;
-            match reqwest::tls::Identity::from_pem(&identity_bytes) {
-                Ok(identity) => {
-                    maybe_identity = Some(identity);
-                }
-                Err(error) => {
-                    let error_message = format!(
-                        "Error getting HTTPS input client identity at path {:?}: {}",
-                        identity_path,
-                        error_root_cause(&error)
-                    );
-                    error!("{error_message}");
-                    return Err(DatapipeError::InputOutputError(error_message));
-                }
-            }
-        } else {
-            maybe_identity = None;
-        }
+                .as_deref(),
+            self.https_input.https_input_client_identity.as_deref(),
+        )
+        .await?;
 
         let https_reader = HttpsReader::new(
             url,
@@ -868,7 +902,9 @@ impl ProgramArgs {
     }
 
     async fn handle_tcp_input(&self) -> Result<Reader, DatapipeError> {
-        let address = self.input.tcp_input.as_ref().unwrap();
+        let address = self.input.tcp_input.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --tcp-input address".to_string())
+        })?;
         match TcpReaderWriter::new(address).await {
             Ok(tcp_reader) => Ok(Reader::Tcp(tcp_reader)),
             Err(error) => {
@@ -881,7 +917,9 @@ impl ProgramArgs {
     }
 
     async fn handle_tcp_listen_input(&self) -> Result<Reader, DatapipeError> {
-        let address = self.input.tcp_listen_input.as_ref().unwrap();
+        let address = self.input.tcp_listen_input.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --tcp-listen-input address".to_string())
+        })?;
         match TcpListenReader::new(address).await {
             Ok(tcp_listen_reader) => Ok(Reader::TcpListen(tcp_listen_reader)),
             Err(error) => {
@@ -897,7 +935,9 @@ impl ProgramArgs {
     }
 
     async fn handle_tls_input(&self) -> Result<Reader, DatapipeError> {
-        let address = self.input.tls_input.as_ref().unwrap();
+        let address = self.input.tls_input.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --tls-input address".to_string())
+        })?;
         match self.get_tls_input_config() {
             Ok(tls_config) => match TlsReaderWriter::new(address, tls_config).await {
                 Ok(tls_reader) => {
@@ -920,24 +960,7 @@ impl ProgramArgs {
     }
 
     fn setup_root_cert_store(&self) -> Result<RootCertStore, DatapipeError> {
-        // setup root cert store
-        let mut root_cert_store = RootCertStore::empty();
-        if let Some(ref root_ca) = self.tls_input.tls_input_root_ca {
-            match get_root_ca(root_ca, &mut root_cert_store) {
-                Ok(()) => {} // no issues loading CA roots
-                Err(error) => {
-                    let error_message = format!(
-                        "Error loading TLS input certificate authority (CA) roots: {}",
-                        error_root_cause(&error)
-                    );
-                    error!("{error_message}");
-                    return Err(DatapipeError::InputOutputError(error_message));
-                }
-            }
-        } else {
-            root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
-        }
-        Ok(root_cert_store)
+        build_tls_root_cert_store(self.tls_input.tls_input_root_ca.as_ref(), "TLS input")
     }
 
     fn get_tls_input_client_config_builder(
@@ -1163,8 +1186,13 @@ impl ProgramArgs {
                 .with_single_cert(cert_chain, server_key)?
         } else {
             let mut roots = RootCertStore::empty();
-            let (_certs_added_count, _certs_ignored_count) =
+            let (certs_added_count, _certs_ignored_count) =
                 roots.add_parsable_certificates(cert_chain.clone());
+            if certs_added_count == 0 {
+                let error_message = "No valid certificates could be added to TLS listen client verification root store".to_string();
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
             let client_cert_verifier = WebPkiClientVerifier::builder(roots.into()).build()?;
             ServerConfig::builder()
                 .with_client_cert_verifier(client_cert_verifier)
@@ -1175,7 +1203,9 @@ impl ProgramArgs {
 
     /// Prepare a reader for TLS listen input
     async fn handle_tls_listen_input(&self) -> Result<Reader, DatapipeError> {
-        let address = self.input.tls_listen_input.as_ref().unwrap();
+        let address = self.input.tls_listen_input.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --tls-listen-input address".to_string())
+        })?;
         match self.get_tls_listen_input_config() {
             Ok(tls_config) => match TlsListenReader::new(address, tls_config).await {
                 Ok(tls_listen_reader) => {
@@ -1203,7 +1233,9 @@ impl ProgramArgs {
 
     /// Prepare a reader for UDP input
     async fn handle_udp_input(&self) -> Result<Reader, DatapipeError> {
-        let address = self.input.udp_input.as_ref().unwrap(); // is_some checked in parent function
+        let address = self.input.udp_input.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --udp-input address".to_string())
+        })?;
         match UdpReader::new(address).await {
             Ok(udp_reader) => {
                 info!("Using UDP input");
@@ -1223,7 +1255,9 @@ impl ProgramArgs {
 
     /// Prepare a reader for UDP multicast input
     async fn handle_udp_multicast_input(&self) -> Result<Reader, DatapipeError> {
-        let address = self.input.udp_multicast_input.as_ref().unwrap();
+        let address = self.input.udp_multicast_input.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --udp-multicast-input address".to_string())
+        })?;
         match UdpReader::new_multicast(address).await {
             Ok(udp_reader) => {
                 info!("Using UDP multicast input");
@@ -1425,7 +1459,9 @@ impl ProgramArgs {
     }
 
     async fn handle_file_output(&self) -> Result<Writer, DatapipeError> {
-        let file_path = self.output.file_output.as_ref().unwrap();
+        let file_path = self.output.file_output.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --file-output path".to_string())
+        })?;
         match FileWriter::new(file_path).await {
             Ok(file_writer) => {
                 info!("Using FILE output for path: {:?}", file_path);
@@ -1444,7 +1480,9 @@ impl ProgramArgs {
     }
 
     fn handle_http_output(&self) -> Result<Writer, DatapipeError> {
-        let url = self.output.http_output.as_ref().unwrap();
+        let url = self.output.http_output.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --http-output URL".to_string())
+        })?;
         let delimiter: Vec<u8> = match self.http_output.http_output_delimiter {
             Some(ref d) => d.clone(),
             None => HttpWriter::DEFAULT_DELIMITER.to_vec(),
@@ -1468,11 +1506,9 @@ impl ProgramArgs {
     }
 
     async fn handle_https_output(&self) -> Result<Writer, DatapipeError> {
-        let url = self.output.https_output.as_ref().unwrap();
-
-        let maybe_root_certs: Option<Vec<Certificate>>;
-        let maybe_crls: Option<Vec<CertificateRevocationList>>;
-        let maybe_identity: Option<Identity>;
+        let url = self.output.https_output.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --https-output URL".to_string())
+        })?;
 
         let allow_invalid_hostnames = self.https_output.https_output_allow_invalid_hostnames;
         let allow_invalid_certs = self.https_output.https_output_allow_invalid_certificates;
@@ -1492,84 +1528,15 @@ impl ProgramArgs {
             .https_output_include_delimiter
             .unwrap_or(true);
 
-        if self.https_output.https_output_root_certificates.is_some() {
-            let root_cert_path = self
-                .https_output
-                .https_output_root_certificates
-                .clone()
-                .unwrap();
-            let root_cert_bytes = tokio::fs::read(&root_cert_path).await?;
-            match reqwest::Certificate::from_pem_bundle(&root_cert_bytes) {
-                Ok(root_certs) => {
-                    maybe_root_certs = Some(root_certs);
-                }
-                Err(error) => {
-                    let error_message = format!(
-                        "Error getting HTTPS output root certificate at path {:?}: {}",
-                        root_cert_path,
-                        error_root_cause(&error)
-                    );
-                    error!("{error_message}");
-                    return Err(DatapipeError::InputOutputError(error_message));
-                }
-            }
-        } else {
-            maybe_root_certs = None;
-        }
-
-        if self
-            .https_output
-            .https_output_certificate_revocation_list
-            .is_some()
-        {
-            let crl_path = self
-                .https_output
+        let (maybe_root_certs, maybe_crls, maybe_identity) = load_https_tls_assets(
+            "HTTPS output",
+            self.https_output.https_output_root_certificates.as_deref(),
+            self.https_output
                 .https_output_certificate_revocation_list
-                .clone()
-                .unwrap();
-            let crl_bytes = tokio::fs::read(&crl_path).await?;
-            match reqwest::tls::CertificateRevocationList::from_pem_bundle(&crl_bytes) {
-                Ok(crls) => {
-                    maybe_crls = Some(crls);
-                }
-                Err(error) => {
-                    let error_message = format!(
-                        "Error getting HTTPS output certificate revocation list at path {:?}: {}",
-                        crl_path,
-                        error_root_cause(&error)
-                    );
-                    error!("{error_message}");
-                    return Err(DatapipeError::InputOutputError(error_message));
-                }
-            }
-        } else {
-            maybe_crls = None;
-        }
-
-        if self.https_output.https_output_client_identity.is_some() {
-            let identity_path = self
-                .https_output
-                .https_output_client_identity
-                .clone()
-                .unwrap();
-            let identity_bytes = tokio::fs::read(&identity_path).await?;
-            match reqwest::tls::Identity::from_pem(&identity_bytes) {
-                Ok(identity) => {
-                    maybe_identity = Some(identity);
-                }
-                Err(error) => {
-                    let error_message = format!(
-                        "Error getting HTTPS output client identity at path {:?}: {}",
-                        identity_path,
-                        error_root_cause(&error)
-                    );
-                    error!("{error_message}");
-                    return Err(DatapipeError::InputOutputError(error_message));
-                }
-            }
-        } else {
-            maybe_identity = None;
-        }
+                .as_deref(),
+            self.https_output.https_output_client_identity.as_deref(),
+        )
+        .await?;
 
         match HttpsWriter::new(
             url,
@@ -1604,7 +1571,9 @@ impl ProgramArgs {
     }
 
     async fn handle_tcp_output(&self) -> Result<Writer, DatapipeError> {
-        let address = self.output.tcp_output.as_ref().unwrap();
+        let address = self.output.tcp_output.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --tcp-output address".to_string())
+        })?;
         match TcpReaderWriter::new(address).await {
             Ok(tcp_writer) => Ok(Writer::Tcp(tcp_writer)),
             Err(error) => {
@@ -1617,7 +1586,9 @@ impl ProgramArgs {
     }
 
     async fn handle_tls_output(&self) -> Result<Writer, DatapipeError> {
-        let address = self.output.tls_output.as_ref().unwrap();
+        let address = self.output.tls_output.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --tls-output address".to_string())
+        })?;
         let tls_config = self.get_tls_output_config()?;
         match TlsReaderWriter::new(address, tls_config).await {
             Ok(tls_writer) => {
@@ -1634,22 +1605,8 @@ impl ProgramArgs {
     }
 
     fn get_tls_output_config(&self) -> Result<ClientConfig, DatapipeError> {
-        // setup root cert store
-        let mut root_cert_store = RootCertStore::empty();
-        root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
-        if let Some(ref root_ca) = self.tls_output.tls_output_root_ca {
-            match get_root_ca(root_ca, &mut root_cert_store) {
-                Ok(()) => {} // no issues loading CA roots
-                Err(error) => {
-                    let error_message = format!(
-                        "Error loading TLS output certificate authority (CA) roots: {}",
-                        error_root_cause(&error)
-                    );
-                    error!("{error_message}");
-                    return Err(DatapipeError::InputOutputError(error_message));
-                }
-            }
-        }
+        let root_cert_store =
+            build_tls_root_cert_store(self.tls_output.tls_output_root_ca.as_ref(), "TLS output")?;
         // begin build the config
         // check if no verification was requested
         let config: ConfigBuilder<ClientConfig, WantsClientCert> =
@@ -1704,7 +1661,9 @@ impl ProgramArgs {
     }
 
     async fn handle_udp_output(&self) -> Result<Writer, DatapipeError> {
-        let address = self.output.udp_output.as_ref().unwrap();
+        let address = self.output.udp_output.as_ref().ok_or_else(|| {
+            DatapipeError::ValidationError("Missing --udp-output address".to_string())
+        })?;
         match UdpWriter::new(address).await {
             Ok(udp_writer) => {
                 info!("Using UDP output");
@@ -1820,7 +1779,7 @@ impl ProgramArgs {
     pub(crate) fn get_encryption_args(&self) -> Result<Option<StreamEncryptor>, DatapipeError> {
         if self.encryption_args.generate_encryption_key {
             let encryption_key = EncryptionKey::generate();
-            println!("Generated encryption key: {}", encryption_key);
+            eprintln!("Generated encryption key: {}", encryption_key);
             let encryptor = StreamEncryptor::new(encryption_key)?;
             return Ok(Some(encryptor));
         }
@@ -1835,7 +1794,10 @@ impl ProgramArgs {
     pub(crate) fn get_decryption_args(&self) -> Result<Option<StreamDecryptor>, DatapipeError> {
         if let Some(ref key_str) = self.decryption_args.decryption_key {
             let encryption_key = EncryptionKey::new(key_str)?;
-            let decryptor = StreamDecryptor::new(encryption_key)?;
+            let decryptor = StreamDecryptor::new_with_legacy(
+                encryption_key,
+                self.decryption_args.decrypt_allow_legacy,
+            )?;
             return Ok(Some(decryptor));
         }
         Ok(None)
@@ -1862,42 +1824,160 @@ impl ProgramArgs {
     }
 }
 
-// helper functions for TLS certificates and keys
-fn get_root_ca(
-    tls_root_ca_path: &PathBuf,
-    root_cert_store: &mut RootCertStore,
-) -> Result<(), DatapipeError> {
-    let certs = CertificateDer::pem_file_iter(tls_root_ca_path).map_err(|error| {
+fn build_tls_root_cert_store(
+    maybe_root_ca: Option<&PathBuf>,
+    label: &str,
+) -> Result<RootCertStore, DatapipeError> {
+    let mut root_cert_store = RootCertStore::empty();
+    if let Some(root_ca) = maybe_root_ca {
+        get_root_ca(root_ca, &mut root_cert_store).map_err(|error| {
+            let error_message = format!(
+                "Error loading {label} certificate authority (CA) roots: {}",
+                error_root_cause(&error)
+            );
+            error!("{error_message}");
+            DatapipeError::InputOutputError(error_message)
+        })?;
+    } else {
+        root_cert_store.extend(TLS_SERVER_ROOTS.iter().cloned());
+    }
+    Ok(root_cert_store)
+}
+
+fn contains_pem_marker(bytes: &[u8]) -> bool {
+    bytes.windows(10).any(|w| w == b"-----BEGIN")
+}
+
+async fn load_https_tls_assets(
+    label: &str,
+    root_cert_path: Option<&Path>,
+    crl_path: Option<&Path>,
+    identity_path: Option<&Path>,
+) -> Result<
+    (
+        Option<Vec<Certificate>>,
+        Option<Vec<CertificateRevocationList>>,
+        Option<Identity>,
+    ),
+    DatapipeError,
+> {
+    let maybe_root_certs = if let Some(path) = root_cert_path {
+        let bytes = tokio::fs::read(path).await?;
+        if bytes.is_empty() {
+            let error_message = format!("{label} root certificate file {:?} is empty", path);
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+        let root_certs = if contains_pem_marker(&bytes) {
+            Certificate::from_pem_bundle(&bytes).map_err(|error| {
+                let error_message = format!(
+                    "Error getting {label} PEM root certificate at path {:?}: {}",
+                    path,
+                    error_root_cause(&error)
+                );
+                error!("{error_message}");
+                DatapipeError::ValidationError(error_message)
+            })?
+        } else {
+            let cert = Certificate::from_der(&bytes).map_err(|error| {
+                let error_message = format!(
+                    "Error getting {label} DER root certificate at path {:?}: {}",
+                    path,
+                    error_root_cause(&error)
+                );
+                error!("{error_message}");
+                DatapipeError::ValidationError(error_message)
+            })?;
+            vec![cert]
+        };
+        if root_certs.is_empty() {
+            let error_message = format!(
+                "No certificates found in {label} root certificate file {:?}",
+                path
+            );
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+        Some(root_certs)
+    } else {
+        None
+    };
+
+    let maybe_crls = if let Some(path) = crl_path {
+        let bytes = tokio::fs::read(path).await?;
+        if bytes.is_empty() {
+            let error_message = format!("{label} CRL file {:?} is empty", path);
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+        let crls = CertificateRevocationList::from_pem_bundle(&bytes).map_err(|error| {
+            let error_message = format!(
+                "Error getting {label} certificate revocation list at path {:?}: {}",
+                path,
+                error_root_cause(&error)
+            );
+            error!("{error_message}");
+            DatapipeError::ValidationError(error_message)
+        })?;
+        if crls.is_empty() {
+            let error_message = format!(
+                "No CRLs found in {label} certificate revocation list file {:?}",
+                path
+            );
+            error!("{error_message}");
+            return Err(DatapipeError::ValidationError(error_message));
+        }
+        Some(crls)
+    } else {
+        None
+    };
+
+    let maybe_identity = if let Some(path) = identity_path {
+        let bytes = tokio::fs::read(path).await?;
+        let identity = Identity::from_pem(&bytes).map_err(|error| {
+            let error_message = format!(
+                "Error getting {label} client identity at path {:?}: {}",
+                path,
+                error_root_cause(&error)
+            );
+            error!("{error_message}");
+            DatapipeError::ValidationError(error_message)
+        })?;
+        Some(identity)
+    } else {
+        None
+    };
+
+    Ok((maybe_root_certs, maybe_crls, maybe_identity))
+}
+
+fn read_tls_certificates(
+    path: &Path,
+    label: &str,
+) -> Result<Vec<CertificateDer<'static>>, DatapipeError> {
+    let bytes = std::fs::read(path).map_err(|error| {
         let error_message = format!(
-            "Cannot open TLS root CA file: {:?}: {}",
-            tls_root_ca_path,
+            "Cannot open TLS {label} file: {:?}: {}",
+            path,
             error_root_cause(&error)
         );
         error!("{error_message}");
         DatapipeError::InputOutputError(error_message)
     })?;
+    if bytes.is_empty() {
+        let error_message = format!("TLS {label} file {:?} is empty", path);
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
 
-    for maybe_ca in certs {
-        match maybe_ca {
-            Ok(ca) => {
-                match root_cert_store.add(ca) {
-                    Ok(()) => {
-                        // successfully added, keep going
-                    }
-                    Err(error) => {
-                        let error_message = format!(
-                            "Error adding certificate authority (CA) to root cert store: {}",
-                            error_root_cause(&error)
-                        );
-                        error!("{error_message}");
-                        return Err(DatapipeError::ValidationError(error_message));
-                    }
-                }
-            }
+    let mut certs = Vec::new();
+    for maybe_cert in CertificateDer::pem_slice_iter(&bytes) {
+        match maybe_cert {
+            Ok(cert) => certs.push(cert),
             Err(error) => {
                 let error_message = format!(
-                    "Error parsing certificate authority (CA) from {:?}: {}",
-                    tls_root_ca_path,
+                    "Error parsing PEM certificate from {label} file {:?}: {}",
+                    path,
                     error_root_cause(&error)
                 );
                 error!("{error_message}");
@@ -1905,62 +1985,98 @@ fn get_root_ca(
             }
         }
     }
+
+    if !certs.is_empty() {
+        return Ok(certs);
+    }
+
+    if contains_pem_marker(&bytes) {
+        let error_message = format!("No certificates found in PEM {label} file {:?}", path);
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
+
+    // Fallback to single DER-encoded X.509 certificate (must begin with ASN.1 SEQUENCE tag 0x30)
+    if bytes.first() != Some(&0x30) {
+        let error_message = format!(
+            "Invalid TLS {label} file {:?}: must be PEM or DER encoded X.509 certificate(s)",
+            path
+        );
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
+
+    Ok(vec![CertificateDer::from(bytes)])
+}
+
+// helper functions for TLS certificates and keys
+fn get_root_ca(
+    tls_root_ca_path: &Path,
+    root_cert_store: &mut RootCertStore,
+) -> Result<(), DatapipeError> {
+    let certs = read_tls_certificates(tls_root_ca_path, "root CA")?;
+    let mut added_count = 0usize;
+    for ca in certs {
+        match root_cert_store.add(ca) {
+            Ok(()) => {
+                added_count += 1;
+            }
+            Err(error) => {
+                let error_message = format!(
+                    "Error adding certificate authority (CA) to root cert store: {}",
+                    error_root_cause(&error)
+                );
+                error!("{error_message}");
+                return Err(DatapipeError::ValidationError(error_message));
+            }
+        }
+    }
+    if added_count == 0 {
+        let error_message = format!(
+            "No valid root CA certificates found in file {:?}",
+            tls_root_ca_path
+        );
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
     Ok(())
 }
 
 fn get_tls_cert_chain(
-    tls_cert_chain_path: &PathBuf,
+    tls_cert_chain_path: &Path,
 ) -> Result<Vec<CertificateDer<'static>>, DatapipeError> {
-    let mut cert_chain = Vec::new();
-    let certs = CertificateDer::pem_file_iter(tls_cert_chain_path).map_err(|error| {
+    read_tls_certificates(tls_cert_chain_path, "certificate chain")
+}
+
+fn get_tls_private_key(
+    tls_private_key_path: &Path,
+) -> Result<PrivateKeyDer<'static>, DatapipeError> {
+    let bytes = std::fs::read(tls_private_key_path).map_err(|error| {
         let error_message = format!(
-            "Cannot open TLS certificate chain file: {:?}: {}",
-            tls_cert_chain_path,
+            "Cannot open TLS private key file: {:?}: {}",
+            tls_private_key_path,
             error_root_cause(&error)
         );
         error!("{error_message}");
         DatapipeError::InputOutputError(error_message)
     })?;
+    if bytes.is_empty() {
+        let error_message = format!("TLS private key file {:?} is empty", tls_private_key_path);
+        error!("{error_message}");
+        return Err(DatapipeError::ValidationError(error_message));
+    }
 
-    for maybe_cert in certs {
-        match maybe_cert {
-            Ok(cert) => {
-                cert_chain.push(cert);
-            }
-            Err(error) => {
+    match PrivateKeyDer::from_pem_slice(&bytes) {
+        Ok(private_key_der) => return Ok(private_key_der.clone_key()),
+        Err(rustls_pki_types::pem::Error::NoItemsFound) => {
+            if contains_pem_marker(&bytes) {
                 let error_message = format!(
-                    "Error adding certificate to certificate chain: {}",
-                    error_root_cause(&error)
+                    "Private key not found in PEM file: {:?}",
+                    tls_private_key_path
                 );
                 error!("{error_message}");
-                return Err(DatapipeError::InputOutputError(error_message));
+                return Err(DatapipeError::ValidationError(error_message));
             }
-        }
-    }
-    Ok(cert_chain)
-}
-
-fn get_tls_private_key(
-    tls_private_key_path: &PathBuf,
-) -> Result<PrivateKeyDer<'static>, DatapipeError> {
-    match PrivateKeyDer::from_pem_file(tls_private_key_path) {
-        Ok(private_key_der) => Ok(private_key_der),
-        Err(rustls_pki_types::pem::Error::Io(error)) => {
-            let error_message = format!(
-                "Cannot open TLS private key file: {:?}: {}",
-                tls_private_key_path,
-                error_root_cause(&error)
-            );
-            error!("{error_message}");
-            Err(DatapipeError::InputOutputError(error_message))
-        }
-        Err(rustls_pki_types::pem::Error::NoItemsFound) => {
-            let error_message = format!(
-                "Private key not found in file: {:?}; file must be in PEM format",
-                tls_private_key_path
-            );
-            error!("{error_message}");
-            Err(DatapipeError::ValidationError(error_message))
         }
         Err(error) => {
             let error_message = format!(
@@ -1969,9 +2085,28 @@ fn get_tls_private_key(
                 error_root_cause(&error)
             );
             error!("{error_message}");
-            Err(DatapipeError::ValidationError(error_message))
+            return Err(DatapipeError::ValidationError(error_message));
         }
     }
+
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+    let der_candidates = [
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(bytes.as_slice())),
+        PrivateKeyDer::Pkcs1(PrivatePkcs1KeyDer::from(bytes.as_slice())),
+        PrivateKeyDer::Sec1(PrivateSec1KeyDer::from(bytes.as_slice())),
+    ];
+    for candidate in der_candidates {
+        if tokio_rustls::rustls::crypto::ring::sign::any_supported_type(&candidate).is_ok() {
+            return Ok(candidate.clone_key());
+        }
+    }
+
+    let error_message = format!(
+        "Invalid or unsupported TLS private key file {:?}: must be PEM or DER (PKCS#1, PKCS#8, or SEC1)",
+        tls_private_key_path
+    );
+    error!("{error_message}");
+    Err(DatapipeError::ValidationError(error_message))
 }
 
 /// Create a custom NO-OP verifier to allow --tls-skip-server-verify to work
@@ -2065,5 +2200,44 @@ mod tests {
         args.version = false;
         args.license = true;
         assert!(args.validate().is_ok());
+    }
+
+    #[test]
+    fn test_tls_helpers_accept_pem_and_der_and_reject_empty() {
+        let cert_key = generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("self-signed generation");
+        let dir = std::env::temp_dir();
+        let suffix = crate::datapipe_types::generate_random_string(12);
+
+        let cert_pem = dir.join(format!("dp_cert_{suffix}.pem"));
+        let cert_der = dir.join(format!("dp_cert_{suffix}.der"));
+        let key_pem = dir.join(format!("dp_key_{suffix}.pem"));
+        let key_der = dir.join(format!("dp_key_{suffix}.der"));
+        let empty_file = dir.join(format!("dp_empty_{suffix}.bin"));
+
+        std::fs::write(&cert_pem, cert_key.cert.pem()).expect("write cert pem");
+        std::fs::write(&cert_der, cert_key.cert.der().as_ref()).expect("write cert der");
+        std::fs::write(&key_pem, cert_key.signing_key.serialize_pem()).expect("write key pem");
+        std::fs::write(&key_der, cert_key.signing_key.serialize_der()).expect("write key der");
+        std::fs::write(&empty_file, []).expect("write empty");
+
+        let pem_certs = get_tls_cert_chain(&cert_pem).expect("load PEM cert");
+        let der_certs = get_tls_cert_chain(&cert_der).expect("load DER cert");
+        assert_eq!(pem_certs.len(), 1);
+        assert_eq!(der_certs.len(), 1);
+        assert!(get_tls_cert_chain(&empty_file).is_err());
+
+        assert!(get_tls_private_key(&key_pem).is_ok());
+        assert!(get_tls_private_key(&key_der).is_ok());
+        assert!(get_tls_private_key(&empty_file).is_err());
+
+        let mut store = RootCertStore::empty();
+        assert!(get_root_ca(&cert_pem, &mut store).is_ok());
+        assert!(get_root_ca(&cert_der, &mut store).is_ok());
+        assert!(get_root_ca(&empty_file, &mut store).is_err());
+
+        for p in [cert_pem, cert_der, key_pem, key_der, empty_file] {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }

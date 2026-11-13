@@ -40,8 +40,8 @@ fn render_frame_and_assert_ascii(ctx: &egui::Context, app: &mut DatapipeApp) {
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         app.render(ui);
     });
-    assert_all_rendered_text_is_ascii(&output.shapes);
     output.textures_delta.clear();
+    assert_all_rendered_text_is_ascii(&output.shapes);
 }
 
 #[test]
@@ -137,7 +137,8 @@ fn test_gui_validation_all_stages() {
     // Enable encryption and generate key
     encrypt.enabled = true;
     encrypt.generate_key();
-    assert_eq!(encrypt.key.len(), 51);
+    assert!(encrypt.key.starts_with("dpk1:"));
+    assert!(EncryptionKey::new(&encrypt.key).is_ok());
     let res = states_to_config(&input, &decrypt, &encrypt, &outputs);
     assert!(res.is_ok());
 }
@@ -602,8 +603,8 @@ fn test_gui_cut_copy_paste_keyboard_shortcuts_across_all_tabs() {
         let mut output = ctx.run_ui(make_input_with_events(events), |ui| {
             app.render(ui);
         });
-        assert_all_rendered_text_is_ascii(&output.shapes);
         output.textures_delta.clear();
+        assert_all_rendered_text_is_ascii(&output.shapes);
         output
     };
 
@@ -697,15 +698,17 @@ fn test_gui_cut_copy_paste_keyboard_shortcuts_across_all_tabs() {
     );
     assert!(app.input_state.tcp_address.is_empty());
 
-    // 2. Decrypt Tab (51-byte monospace key field)
+    // 2. Decrypt Tab (masked monospace secret key field)
     app.active_tab = Tab::Decrypt;
     app.decrypt_state.enabled = true;
     app.decrypt_state.key.clear();
     let out = run_app(&ctx, &mut app, vec![]);
-    let decrypt_pos =
-        find_rendered_text_pos(&out.shapes, "Enter 51-character UTF-8 decryption key...")
-            .expect("Decrypt key hint should be rendered")
-            + egui::vec2(16.0, 6.0);
+    let decrypt_pos = find_rendered_text_pos(
+        &out.shapes,
+        "Enter decryption key (dpk1:... or legacy 51-byte)...",
+    )
+    .expect("Decrypt key hint should be rendered")
+        + egui::vec2(16.0, 6.0);
 
     let generated_key = EncryptionKey::generate().to_string();
     click_at(&ctx, &mut app, decrypt_pos);
@@ -716,15 +719,35 @@ fn test_gui_cut_copy_paste_keyboard_shortcuts_across_all_tabs() {
     );
     assert_eq!(app.decrypt_state.key, generated_key);
 
-    // 3. Encrypt Tab (51-byte monospace key field): Select All + Ctrl+C copies the key
+    // Select all and verify Event::Copy works even while m3_secret_field is masked
+    let _ = run_app(
+        &ctx,
+        &mut app,
+        vec![egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: Some(egui::Key::A),
+            pressed: true,
+            repeat: false,
+            modifiers: ctrl_mods,
+        }],
+    );
+    let secret_copy_out = run_app(&ctx, &mut app, vec![egui::Event::Copy]);
+    assert_eq!(
+        extract_copied_text(&secret_copy_out).as_deref(),
+        Some(generated_key.as_str())
+    );
+
+    // 3. Encrypt Tab (masked monospace secret key field): Select All + Ctrl+C copies the key
     app.active_tab = Tab::Encrypt;
     app.encrypt_state.enabled = true;
     app.encrypt_state.key.clear();
     let out = run_app(&ctx, &mut app, vec![]);
-    let encrypt_pos =
-        find_rendered_text_pos(&out.shapes, "Enter or generate a 51-character UTF-8 key...")
-            .expect("Encrypt key hint should be rendered")
-            + egui::vec2(16.0, 6.0);
+    let encrypt_pos = find_rendered_text_pos(
+        &out.shapes,
+        "Enter or generate an encryption key (dpk1:...)...",
+    )
+    .expect("Encrypt key hint should be rendered")
+        + egui::vec2(16.0, 6.0);
 
     click_at(&ctx, &mut app, encrypt_pos);
     let _ = run_app(

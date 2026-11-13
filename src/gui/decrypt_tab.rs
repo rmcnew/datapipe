@@ -1,11 +1,11 @@
 //! Decrypt tab Material Design 3 view and ChaCha20-Poly1305 key configuration.
 
 use crate::gui::style::{
-    bottom_action_bar, m3_card, m3_monospace_field, m3_switch, nav_back_button, nav_next_button,
-    palette, section_header, status_chip,
+    bottom_action_bar, m3_card, m3_encryption_key_status, m3_insecure_checkbox, m3_secret_field,
+    m3_switch, nav_back_button, nav_next_button, palette, section_header, status_chip,
 };
 use crate::gui::types::{DecryptState, Tab};
-use egui::{CornerRadius, Frame, Layout, Margin, ProgressBar, RichText, Ui};
+use egui::{Frame, Layout, Margin, RichText, Ui};
 
 /// Renders the Decrypt stage configuration tab using Material Design 3 cards and controls.
 pub fn show_decrypt_tab(ui: &mut Ui, state: &mut DecryptState, active_tab: &mut Tab) {
@@ -53,7 +53,7 @@ pub fn show_decrypt_tab(ui: &mut Ui, state: &mut DecryptState, active_tab: &mut 
                                 );
                                 ui.label(
                                     RichText::new(
-                                        "ChaCha20-Poly1305 AEAD stream cipher (32-byte key + 19-byte nonce)",
+                                        "ChaCha20-Poly1305 AEAD stream cipher (full-entropy dpk1: / hex: / 51-byte legacy)",
                                     )
                                     .size(12.0)
                                     .color(p.on_surface_variant),
@@ -70,7 +70,7 @@ pub fn show_decrypt_tab(ui: &mut Ui, state: &mut DecryptState, active_tab: &mut 
                         ui.add_space(12.0);
 
                         ui.label(
-                            RichText::new("51-Byte UTF-8 Decryption Key")
+                            RichText::new("Decryption Key")
                                 .size(13.5)
                                 .strong()
                                 .color(if state.enabled {
@@ -81,10 +81,11 @@ pub fn show_decrypt_tab(ui: &mut Ui, state: &mut DecryptState, active_tab: &mut 
                         );
                         ui.add_space(6.0);
 
-                        m3_monospace_field(
+                        m3_secret_field(
                             ui,
+                            "decrypt_key",
                             &mut state.key,
-                            "Enter 51-character UTF-8 decryption key...",
+                            "Enter decryption key (dpk1:... or legacy 51-byte)...",
                             ui.available_width(),
                             state.enabled,
                         );
@@ -92,50 +93,18 @@ pub fn show_decrypt_tab(ui: &mut Ui, state: &mut DecryptState, active_tab: &mut 
                         ui.add_space(10.0);
 
                         if state.enabled {
-                            let byte_count = state.key.len();
-                            let progress = (byte_count as f32 / 51.0).clamp(0.0, 1.0);
-                            let bar_color = if byte_count == 51 {
-                                p.tertiary
-                            } else {
-                                p.error
-                            };
-
-                            ui.add(
-                                ProgressBar::new(progress)
-                                    .desired_height(6.0)
-                                    .corner_radius(CornerRadius::same(3))
-                                    .fill(bar_color),
+                            m3_encryption_key_status(
+                                ui,
+                                &state.key,
+                                "Ready to decrypt incoming stream frames.",
+                                |_| {},
                             );
-
-                            ui.add_space(8.0);
-
-                            ui.horizontal(|ui| {
-                                if byte_count == 51 {
-                                    status_chip(
-                                        ui,
-                                        "VALID (51 / 51 BYTES)",
-                                        p.tertiary_container,
-                                        p.on_tertiary_container,
-                                    );
-                                    ui.label(
-                                        RichText::new("Ready to decrypt incoming stream frames.")
-                                            .size(12.5)
-                                            .color(p.on_surface_variant),
-                                    );
-                                } else {
-                                    status_chip(
-                                        ui,
-                                        &format!("{byte_count} / 51 BYTES"),
-                                        p.error_container,
-                                        p.on_error_container,
-                                    );
-                                    ui.label(
-                                        RichText::new("Key must be exactly 51 UTF-8 bytes.")
-                                            .size(12.5)
-                                            .color(p.error),
-                                    );
-                                }
-                            });
+                            ui.add_space(10.0);
+                            m3_insecure_checkbox(
+                                ui,
+                                &mut state.allow_legacy,
+                                "Allow legacy unauthenticated v1 streams (UNSAFE against truncation)",
+                            );
                         } else {
                             ui.horizontal(|ui| {
                                 status_chip(

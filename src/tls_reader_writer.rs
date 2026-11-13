@@ -57,9 +57,9 @@ impl TlsReaderWriter {
 
 impl InputReader for TlsReaderWriter {
     async fn read(&mut self) -> Result<bytes::Bytes, Error> {
-        let mut vec_bytes = Vec::with_capacity(TLS_READER_WRITER_BUFFER_SIZE);
-        self.tls_stream.read_exact(&mut vec_bytes).await?;
-        Ok(Bytes::from(vec_bytes))
+        let mut buf = [0u8; TLS_READER_WRITER_BUFFER_SIZE];
+        let length = self.tls_stream.read(&mut buf).await?;
+        Ok(Bytes::copy_from_slice(&buf[..length]))
     }
 }
 
@@ -67,6 +67,11 @@ impl OutputWriter for TlsReaderWriter {
     async fn write(&mut self, bytes: &[u8]) -> Result<(), Error> {
         self.tls_stream.write_all(bytes).await?;
         self.tls_stream.flush().await
+    }
+
+    async fn close(&mut self) -> Result<(), Error> {
+        self.tls_stream.flush().await?;
+        self.tls_stream.shutdown().await
     }
 }
 
@@ -87,14 +92,41 @@ fn test_get_domain() {
     let value4 = "192.168.32.17";
     let domain4 = get_domain(value4);
     assert_eq!(&domain4, value4);
+
+    assert_eq!(get_domain("[::1]:443"), "::1");
+    assert_eq!(get_domain("[2001:db8::1]"), "2001:db8::1");
+    assert_eq!(get_domain("::1"), "::1");
 }
 
 fn get_domain(address: &str) -> String {
-    match address.rfind(':') {
-        Some(index) => {
-            let (domain, _port) = address.split_at(index);
-            domain.to_string()
-        }
-        None => address.to_string(),
+    if let Some(after_open) = address.strip_prefix('[')
+        && let Some((host, _rest)) = after_open.split_once(']')
+    {
+        return host.to_string();
+    }
+    if address.parse::<std::net::IpAddr>().is_ok() {
+        return address.to_string();
+    }
+    if let Some((host, port)) = address.rsplit_once(':')
+        && !host.contains(':')
+        && port.chars().all(|c| c.is_ascii_digit())
+    {
+        return host.to_string();
+    }
+    address.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_domain;
+
+    #[test]
+    fn test_get_domain_ipv4_ipv6_and_hostname() {
+        assert_eq!(get_domain("[::1]:443"), "::1");
+        assert_eq!(get_domain("[2001:db8::1]"), "2001:db8::1");
+        assert_eq!(get_domain("::1"), "::1");
+        assert_eq!(get_domain("127.0.0.1:8443"), "127.0.0.1");
+        assert_eq!(get_domain("example.com:8443"), "example.com");
+        assert_eq!(get_domain("example.com"), "example.com");
     }
 }

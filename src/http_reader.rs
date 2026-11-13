@@ -4,13 +4,73 @@ use bytes::Bytes;
 use log::{error, trace};
 use reqwest::StatusCode;
 use std::io::{Error, ErrorKind};
+use std::time::Duration;
+
+pub(crate) fn build_poll_interval(rate: Duration) -> Option<tokio::time::Interval> {
+    if rate.is_zero() {
+        None
+    } else {
+        Some(tokio::time::interval(rate))
+    }
+}
+
+pub(crate) async fn read_http_response(
+    client: &reqwest::Client,
+    url: &url::Url,
+    label: &str,
+) -> Result<Bytes, Error> {
+    match client.get(url.as_str()).send().await {
+        Ok(response) => {
+            trace!("{label}:  Web server response is: {:?}", response);
+            match response.status() {
+                StatusCode::OK => {
+                    trace!("{label}:  Status is OK. Getting response body bytes");
+                    match response.bytes().await {
+                        Ok(bytes) => Ok(bytes),
+                        Err(error) => {
+                            let error_message = format!(
+                                "{label}:  Error converting response body to bytes: {error}"
+                            );
+                            error!("{error_message}");
+                            Err(Error::other(error_message))
+                        }
+                    }
+                }
+                _ => {
+                    error!("{label}:  non-Ok status from web server: {:?}", response);
+                    match response.error_for_status() {
+                        Ok(res) => {
+                            let error_message = format!(
+                                "{label}:  Failed converting web server response to error: {:?}",
+                                res
+                            );
+                            error!("{error_message}");
+                            Err(Error::other(error_message))
+                        }
+                        Err(error) => {
+                            let error_message =
+                                format!("{label}:  decoded web server status: {error}");
+                            error!("{error_message}");
+                            Err(Error::other(error_message))
+                        }
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            let error_message = format!("{label}:  Error getting HTTP input: {error}");
+            error!("{error_message}");
+            Err(Error::new(ErrorKind::NotConnected, error_message))
+        }
+    }
+}
 
 /// Reader that polls an HTTP endpoint on a fixed interval.
 #[derive(Debug)]
 pub struct HttpReader {
     client: reqwest::Client,
     url: url::Url,
-    update_interval: tokio::time::Interval,
+    read_interval: Option<tokio::time::Interval>,
 }
 
 impl HttpReader {
@@ -18,6 +78,8 @@ impl HttpReader {
     pub const DEFAULT_UPDATE_RATE: u64 = 5000; // milliseconds
 
     /// Creates a new [`HttpReader`] polling `http_input_url` every `update_rate` milliseconds.
+    ///
+    /// An `update_rate` of `0` polls continuously without waiting for a timer interval.
     ///
     /// # Examples
     ///
@@ -50,58 +112,16 @@ impl HttpReader {
         Ok(Self {
             client,
             url,
-            update_interval: tokio::time::interval(std::time::Duration::from_millis(update_rate)),
+            read_interval: build_poll_interval(Duration::from_millis(update_rate)),
         })
     }
 }
 
 impl InputReader for HttpReader {
     async fn read(&mut self) -> Result<Bytes, Error> {
-        self.update_interval.tick().await; // wait until it is time to read
-        match self.client.get(self.url.as_str()).send().await {
-            Ok(response) => {
-                trace!("HttpInput:  Web server response is: {:?}", response);
-                match response.status() {
-                    StatusCode::OK => {
-                        trace!("HttpInput:  Status is OK. Getting response body bytes");
-                        match response.bytes().await {
-                            Ok(bytes) => Ok(bytes),
-                            Err(error) => {
-                                let error_message = format!(
-                                    "HttpInput:  Error converting response body to bytes: {}",
-                                    error
-                                );
-                                error!("{}", error_message);
-                                Err(Error::other(error_message))
-                            }
-                        }
-                    }
-                    _ => {
-                        error!("HttpInput:  non-Ok status from web server: {:?}", response);
-                        match response.error_for_status() {
-                            Ok(res) => {
-                                let error_message = format!(
-                                    "HttpInput:  Failed converting web server response to error: {:?}",
-                                    res
-                                );
-                                error!("{}", error_message);
-                                Err(Error::other(error_message))
-                            }
-                            Err(error) => {
-                                let error_message =
-                                    format!("HttpInput:  decoded web server status: {}", error);
-                                error!("{}", error_message);
-                                Err(Error::other(error_message))
-                            }
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                let error_message = format!("HttpInput:  Error getting HTTP input: {}", error);
-                error!("{}", error_message);
-                Err(Error::new(ErrorKind::NotConnected, error_message))
-            }
+        if let Some(ref mut interval) = self.read_interval {
+            interval.tick().await;
         }
+        read_http_response(&self.client, &self.url, "HttpInput").await
     }
 }

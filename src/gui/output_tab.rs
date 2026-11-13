@@ -1,9 +1,10 @@
 //! Output tab Material Design 3 view, dynamic multi-output fan-out cards (1 to 64 sinks), and form fields.
 
 use crate::gui::style::{
-    bottom_action_bar, compact_tonal_button, danger_outlined_button, m3_card, m3_monospace_field,
-    m3_text_field, m3_tonal_card, nav_back_button, nav_next_button, palette, plus_button,
-    section_header, status_chip,
+    bottom_action_bar, compact_tonal_button, danger_outlined_button, m3_card,
+    m3_field_label as field_label, m3_insecure_checkbox as insecure_checkbox, m3_monospace_field,
+    m3_secret_field, m3_text_field, m3_tonal_card, nav_back_button, nav_next_button, palette,
+    plus_button, section_header, status_chip,
 };
 use crate::gui::types::{OutputState, OutputType, Tab};
 use egui::{Frame, Layout, Margin, RichText, Ui};
@@ -138,16 +139,6 @@ pub fn show_output_tab(ui: &mut Ui, outputs: &mut Vec<OutputState>, active_tab: 
     }
 }
 
-fn field_label(ui: &mut Ui, label: &str) {
-    let p = palette(ui);
-    ui.label(
-        RichText::new(label)
-            .size(13.5)
-            .strong()
-            .color(p.on_surface_variant),
-    );
-}
-
 fn pick_file_row(ui: &mut Ui, value: &mut String, hint: &str, save_dialog: bool) {
     ui.horizontal(|ui| {
         let text_width = (ui.available_width() - 96.0).max(120.0);
@@ -161,16 +152,6 @@ fn pick_file_row(ui: &mut Ui, value: &mut String, hint: &str, save_dialog: bool)
             if let Some(path) = selected {
                 *value = path.display().to_string();
             }
-        }
-    });
-}
-
-fn insecure_checkbox(ui: &mut Ui, checked: &mut bool, label: &str) {
-    let p = palette(ui);
-    ui.horizontal(|ui| {
-        ui.checkbox(checked, label);
-        if *checked {
-            status_chip(ui, "INSECURE", p.warning_container, p.on_warning_container);
         }
     });
 }
@@ -267,11 +248,11 @@ fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usiz
                 });
                 ui.end_row();
 
-                field_label(ui, "Root Certificates (PEM)");
+                field_label(ui, "Root Certificates (PEM or DER)");
                 pick_file_row(
                     ui,
                     &mut state.https_root_certificates,
-                    "Optional custom CA bundle (.pem)",
+                    "Optional custom CA bundle (PEM or DER)",
                     false,
                 );
                 ui.end_row();
@@ -314,29 +295,29 @@ fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usiz
                 m3_text_field(ui, &mut state.tls_address, "127.0.0.1:9444", 260.0);
                 ui.end_row();
 
-                field_label(ui, "Client Cert Chain (DER)");
+                field_label(ui, "Client Cert Chain (PEM or DER)");
                 pick_file_row(
                     ui,
                     &mut state.tls_cert_chain,
-                    "Client certificate (.der)",
+                    "Client certificate (PEM or DER)",
                     false,
                 );
                 ui.end_row();
 
-                field_label(ui, "Client Private Key (DER)");
+                field_label(ui, "Client Private Key (PEM or DER)");
                 pick_file_row(
                     ui,
                     &mut state.tls_client_key,
-                    "Client private key (.der)",
+                    "Client private key (PEM or DER)",
                     false,
                 );
                 ui.end_row();
 
-                field_label(ui, "Custom Root CA (PEM)");
+                field_label(ui, "Custom Root CA (PEM or DER)");
                 pick_file_row(
                     ui,
                     &mut state.tls_root_ca,
-                    "Optional root CA certificate (.pem)",
+                    "Optional root CA certificate (PEM or DER)",
                     false,
                 );
                 ui.end_row();
@@ -384,9 +365,10 @@ fn render_single_output_fields(ui: &mut Ui, state: &mut OutputState, index: usiz
 
                 field_label(ui, "Local Secret Key (Optional)");
                 ui.horizontal(|ui| {
-                    let text_width = (ui.available_width() - 120.0).max(140.0);
-                    m3_monospace_field(
+                    let text_width = (ui.available_width() - 120.0).max(180.0);
+                    m3_secret_field(
                         ui,
+                        ("output_iroh_secret_key", index),
                         &mut state.iroh_secret_key,
                         "Optional 64-character hex Ed25519 secret key",
                         text_width,

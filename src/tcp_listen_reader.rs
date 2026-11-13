@@ -34,26 +34,28 @@ impl TcpListenReader {
 
 impl InputReader for TcpListenReader {
     async fn read(&mut self) -> Result<Bytes, Error> {
-        if self.maybe_tcp_stream.is_none() {
-            info!("Listening for connection");
-            match self.tcp_listener.accept().await {
-                Ok((tcp_stream, addr)) => {
-                    info!("Connection from {} accepted", addr);
-                    info!(
-                        "TcpStream info: Local Addr:{:?}, Peer Addr:{:?}",
-                        tcp_stream.local_addr()?,
-                        tcp_stream.peer_addr()?
-                    );
-                    self.maybe_tcp_stream = Some(tcp_stream);
-                }
-                Err(error) => {
-                    let error_message = format!("Error accepting connection: {}", error);
-                    error!("{}", error_message);
-                    return Err(Error::new(ErrorKind::ConnectionAborted, error_message));
+        let tcp_stream = match self.maybe_tcp_stream {
+            Some(ref mut stream) => stream,
+            None => {
+                info!("Listening for connection");
+                match self.tcp_listener.accept().await {
+                    Ok((tcp_stream, addr)) => {
+                        info!("Connection from {} accepted", addr);
+                        info!(
+                            "TcpStream info: Local Addr:{:?}, Peer Addr:{:?}",
+                            tcp_stream.local_addr()?,
+                            tcp_stream.peer_addr()?
+                        );
+                        self.maybe_tcp_stream.insert(tcp_stream)
+                    }
+                    Err(error) => {
+                        let error_message = format!("Error accepting connection: {}", error);
+                        error!("{}", error_message);
+                        return Err(Error::new(ErrorKind::ConnectionAborted, error_message));
+                    }
                 }
             }
-        }
-        let tcp_stream = self.maybe_tcp_stream.as_mut().unwrap();
+        };
         let mut vec_bytes = [0; TCP_LISTEN_READ_BUFFER_SIZE];
         info!("Attempting to read the stream");
         match tcp_stream.read(&mut vec_bytes).await {

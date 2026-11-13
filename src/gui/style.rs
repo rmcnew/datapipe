@@ -5,10 +5,12 @@
 //! stadium-pill action buttons with vector-painted icons and hover/press state layers,
 //! M3 Primary Tabs, animated M3 Switches, Outlined/Elevated Cards, and semantic status chips.
 
+use crate::datapipe_types::EncryptionKey;
 use egui::{
     Color32, CornerRadius, CursorIcon, Event, FontFamily, FontId, Frame, Id, Key, Margin, Painter,
-    PointerButton, Popup, Pos2, Rect, Response, RichText, Sense, Shadow, Shape, Stroke, StrokeKind,
-    Style, TextBuffer as _, TextStyle, Theme, Ui, Vec2, ViewportCommand, Visuals, WidgetInfo, pos2,
+    PointerButton, Popup, Pos2, ProgressBar, Rect, Response, RichText, Sense, Shadow, Shape,
+    Stroke, StrokeKind, Style, TextBuffer as _, TextStyle, Theme, Ui, Vec2, ViewportCommand,
+    Visuals, WidgetInfo, pos2,
     style::Selection,
     text::{CCursor, CCursorRange},
     text_edit::TextEditState,
@@ -1376,6 +1378,7 @@ fn render_m3_text_field(
     desired_width: f32,
     enabled: bool,
     monospace: bool,
+    masked: bool,
 ) -> Response {
     ui.add_enabled_ui(enabled, |ui| {
         let id = ui.next_auto_id();
@@ -1439,12 +1442,44 @@ fn render_m3_text_field(
         }
 
         // 2. Render the underlying single-line TextEdit widget.
+        let p = palette(ui);
+        let mask_font_id = if monospace {
+            TextStyle::Monospace.resolve(ui.style())
+        } else {
+            TextStyle::Body.resolve(ui.style())
+        };
+        let mask_line_height =
+            ui.fonts_mut(|f| f.row_height(&mask_font_id)) + ui.spacing().extra_text_line_spacing;
+        let mask_text_color = if ui.is_enabled() {
+            ui.style().visuals.text_color()
+        } else {
+            p.disabled_content()
+        };
+        // Mask with ASCII '*' via layouter rather than `.password(true)` so secret fields
+        // render strictly ASCII glyphs and retain Cut/Copy clipboard behavior.
+        let mut mask_layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap_width: f32| {
+            let masked_text = "*".repeat(buf.as_str().chars().count());
+            let mut layout_job = egui::text::LayoutJob::simple_singleline(
+                masked_text,
+                mask_font_id.clone(),
+                mask_text_color,
+            );
+            layout_job.keep_trailing_whitespace = true;
+            for section in &mut layout_job.sections {
+                section.format.line_height = Some(mask_line_height);
+            }
+            ui.fonts_mut(|f| f.layout_job(layout_job))
+        };
+
         let mut text_edit = egui::TextEdit::singleline(value)
             .id(id)
             .hint_text(hint)
             .desired_width(desired_width);
         if monospace {
             text_edit = text_edit.font(TextStyle::Monospace);
+        }
+        if masked {
+            text_edit = text_edit.layouter(&mut mask_layouter);
         }
 
         let mut output = text_edit.show(ui);
@@ -1647,12 +1682,13 @@ fn render_m3_text_field(
 ///
 /// let ctx = egui::Context::default();
 /// let mut url = String::from("http://127.0.0.1:8080");
-/// let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+/// let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
 ///     let _response = m3_text_field(ui, &mut url, "http://example.com", 240.0);
 /// });
+/// output.textures_delta.clear();
 /// ```
 pub fn m3_text_field(ui: &mut Ui, value: &mut String, hint: &str, desired_width: f32) -> Response {
-    render_m3_text_field(ui, value, hint, desired_width, true, false)
+    render_m3_text_field(ui, value, hint, desired_width, true, false, false)
 }
 
 /// Renders a single-line Material Design 3 text field with explicit `enabled` control,
@@ -1664,10 +1700,17 @@ pub fn m3_text_field(ui: &mut Ui, value: &mut String, hint: &str, desired_width:
 /// use datapipe::gui::style::m3_text_field_enabled;
 ///
 /// let ctx = egui::Context::default();
-/// let mut path = String::from("/tmp/cert.der");
-/// let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-///     let _response = m3_text_field_enabled(ui, &mut path, "Certificate (.der)", 220.0, true);
+/// let mut path = String::from("/tmp/cert.pem");
+/// let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+///     let _response = m3_text_field_enabled(
+///         ui,
+///         &mut path,
+///         "Certificate (PEM or DER)",
+///         220.0,
+///         true,
+///     );
 /// });
+/// output.textures_delta.clear();
 /// ```
 pub fn m3_text_field_enabled(
     ui: &mut Ui,
@@ -1676,11 +1719,11 @@ pub fn m3_text_field_enabled(
     desired_width: f32,
     enabled: bool,
 ) -> Response {
-    render_m3_text_field(ui, value, hint, desired_width, enabled, false)
+    render_m3_text_field(ui, value, hint, desired_width, enabled, false, false)
 }
 
-/// Renders a single-line monospace Material Design 3 text field (suitable for 51-byte
-/// cryptographic keys) with explicit `enabled` control, supporting text highlighting,
+/// Renders a single-line monospace Material Design 3 text field (suitable for hexadecimal keys,
+/// peer IDs, and hashes) with explicit `enabled` control, supporting text highlighting,
 /// `Ctrl+X` / `Ctrl+C` / `Ctrl+V` / `Ctrl+A` shortcuts, and a right-click pop-up context menu.
 ///
 /// # Examples
@@ -1689,9 +1732,10 @@ pub fn m3_text_field_enabled(
 ///
 /// let ctx = egui::Context::default();
 /// let mut key = String::new();
-/// let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-///     let _response = m3_monospace_field(ui, &mut key, "Enter 51-byte key...", 320.0, true);
+/// let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+///     let _response = m3_monospace_field(ui, &mut key, "Enter Peer EndpointId...", 320.0, true);
 /// });
+/// output.textures_delta.clear();
 /// ```
 pub fn m3_monospace_field(
     ui: &mut Ui,
@@ -1700,7 +1744,155 @@ pub fn m3_monospace_field(
     desired_width: f32,
     enabled: bool,
 ) -> Response {
-    render_m3_text_field(ui, value, hint, desired_width, enabled, true)
+    render_m3_text_field(ui, value, hint, desired_width, enabled, true, false)
+}
+
+/// Renders a single-line masked monospace Material Design 3 secret field with an adjacent
+/// `Show`/`Hide` toggle button. Supports full text selection, `Ctrl+X` / `Ctrl+C` / `Ctrl+V` /
+/// `Ctrl+A` clipboard shortcuts (even while masked), and a right-click pop-up context menu.
+///
+/// # Examples
+/// ```
+/// use datapipe::gui::style::m3_secret_field;
+///
+/// let ctx = egui::Context::default();
+/// let mut secret = String::new();
+/// let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+///     let _response = m3_secret_field(
+///         ui,
+///         "secret_example",
+///         &mut secret,
+///         "Enter encryption key...",
+///         320.0,
+///         true,
+///     );
+/// });
+/// output.textures_delta.clear();
+/// ```
+pub fn m3_secret_field(
+    ui: &mut Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    hint: &str,
+    desired_width: f32,
+    enabled: bool,
+) -> Response {
+    let reveal_id = ui.make_persistent_id(("m3_secret_reveal", id_salt));
+    let mut revealed = ui
+        .ctx()
+        .data_mut(|d| d.get_temp::<bool>(reveal_id).unwrap_or(false));
+
+    ui.horizontal(|ui| {
+        let toggle_width = 64.0;
+        let field_width = (desired_width - toggle_width - ui.spacing().item_spacing.x).max(120.0);
+        let response = render_m3_text_field(ui, value, hint, field_width, enabled, true, !revealed);
+        let p = palette(ui);
+        let label = if revealed { "Hide" } else { "Show" };
+        let (fill, text_color) = if revealed {
+            (p.primary_container, p.on_primary_container)
+        } else {
+            (p.secondary_container, p.on_secondary_container)
+        };
+        if render_pill_button(
+            ui,
+            label,
+            enabled,
+            vec2(toggle_width, 32.0),
+            fill,
+            text_color,
+            None,
+        )
+        .clicked()
+        {
+            revealed = !revealed;
+            ui.ctx().data_mut(|d| d.insert_temp(reveal_id, revealed));
+        }
+        response
+    })
+    .inner
+}
+
+/// Renders a standard muted field label for two-column form grids.
+pub(crate) fn m3_field_label(ui: &mut Ui, label: &str) {
+    let p = palette(ui);
+    ui.label(
+        RichText::new(label)
+            .size(13.5)
+            .strong()
+            .color(p.on_surface_variant),
+    );
+}
+
+/// Renders a security-sensitive checkbox accompanied by an `INSECURE` warning chip when checked.
+pub(crate) fn m3_insecure_checkbox(ui: &mut Ui, checked: &mut bool, label: &str) {
+    let p = palette(ui);
+    ui.horizontal(|ui| {
+        ui.checkbox(checked, label);
+        if *checked {
+            status_chip(ui, "INSECURE", p.warning_container, p.on_warning_container);
+        }
+    });
+}
+
+/// Renders the shared key-validation progress bar and status chip for Encrypt/Decrypt tabs.
+pub(crate) fn m3_encryption_key_status(
+    ui: &mut Ui,
+    key: &str,
+    ready_message: &str,
+    add_trailing: impl FnOnce(&mut Ui),
+) {
+    let p = palette(ui);
+    let trimmed_empty = key.trim().is_empty();
+    let is_valid = !trimmed_empty && EncryptionKey::new(key).is_ok();
+    let (progress, bar_color) = if is_valid {
+        (1.0, p.tertiary)
+    } else if trimmed_empty {
+        (0.0, p.error)
+    } else {
+        (0.5, p.error)
+    };
+
+    ui.add(
+        ProgressBar::new(progress)
+            .desired_height(6.0)
+            .corner_radius(CornerRadius::same(3))
+            .fill(bar_color),
+    );
+
+    ui.add_space(8.0);
+
+    ui.horizontal_wrapped(|ui| {
+        if is_valid {
+            status_chip(
+                ui,
+                "VALID KEY",
+                p.tertiary_container,
+                p.on_tertiary_container,
+            );
+            ui.label(
+                RichText::new(ready_message)
+                    .size(12.5)
+                    .color(p.on_surface_variant),
+            );
+        } else if trimmed_empty {
+            status_chip(ui, "KEY REQUIRED", p.error_container, p.on_error_container);
+            ui.label(
+                RichText::new("Enter or generate a dpk1:, hex:, or legacy 51-byte UTF-8 key.")
+                    .size(12.5)
+                    .color(p.error),
+            );
+        } else {
+            status_chip(ui, "INVALID KEY", p.error_container, p.on_error_container);
+            ui.label(
+                RichText::new(
+                    "Key must be dpk1:<68 base64url>, hex:<102 hex>, or legacy 51 UTF-8 bytes.",
+                )
+                .size(12.5)
+                .color(p.error),
+            );
+        }
+        add_trailing(ui);
+    });
 }
 
 /// Renders the standardized M3 Bottom Action Bar inside a tab view.

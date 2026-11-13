@@ -271,7 +271,7 @@ impl InputState {
                 }
                 if self.http_rate.trim().parse::<u64>().is_err() {
                     errors.push(
-                        "Input: HTTP poll rate must be a positive integer in milliseconds."
+                        "Input: HTTP poll rate must be a non-negative integer in milliseconds."
                             .to_string(),
                     );
                 }
@@ -284,7 +284,7 @@ impl InputState {
                 }
                 if self.https_rate.trim().parse::<u64>().is_err() {
                     errors.push(
-                        "Input: HTTPS poll rate must be a positive integer in milliseconds."
+                        "Input: HTTPS poll rate must be a non-negative integer in milliseconds."
                             .to_string(),
                     );
                 }
@@ -404,8 +404,10 @@ impl InputState {
 pub struct DecryptState {
     /// Whether decryption is enabled
     pub enabled: bool,
-    /// 51-byte UTF-8 decryption key
+    /// Decryption key (`dpk1:...`, `hex:...`, or legacy 51-byte UTF-8 key)
     pub key: String,
+    /// Allow legacy v1 streams without authenticated EOF framing (UNSAFE against truncation)
+    pub allow_legacy: bool,
 }
 
 impl DecryptState {
@@ -415,14 +417,8 @@ impl DecryptState {
         if self.enabled {
             if self.key.trim().is_empty() {
                 errors.push(
-                    "Decrypt: 51-byte UTF-8 Decryption Key is required when decryption is enabled."
-                        .to_string(),
+                    "Decrypt: Decryption key is required when decryption is enabled.".to_string(),
                 );
-            } else if self.key.len() != 51 {
-                errors.push(format!(
-                    "Decrypt: Decryption key must be exactly 51 bytes long (currently {} bytes).",
-                    self.key.len()
-                ));
             } else if let Err(e) = EncryptionKey::new(&self.key) {
                 errors.push(format!("Decrypt: Invalid decryption key: {e}"));
             }
@@ -440,12 +436,12 @@ impl DecryptState {
 pub struct EncryptState {
     /// Whether encryption is enabled
     pub enabled: bool,
-    /// 51-byte UTF-8 encryption key
+    /// Encryption key (`dpk1:...`, `hex:...`, or legacy 51-byte UTF-8 key)
     pub key: String,
 }
 
 impl EncryptState {
-    /// Generates a random 51-byte encryption key.
+    /// Generates a full-entropy encryption key (`dpk1:...`).
     pub fn generate_key(&mut self) {
         let key = EncryptionKey::generate();
         self.key = key.to_string();
@@ -457,14 +453,8 @@ impl EncryptState {
         if self.enabled {
             if self.key.trim().is_empty() {
                 errors.push(
-                    "Encrypt: 51-byte UTF-8 Encryption Key is required when encryption is enabled."
-                        .to_string(),
+                    "Encrypt: Encryption key is required when encryption is enabled.".to_string(),
                 );
-            } else if self.key.len() != 51 {
-                errors.push(format!(
-                    "Encrypt: Encryption key must be exactly 51 bytes long (currently {} bytes).",
-                    self.key.len()
-                ));
             } else if let Err(e) = EncryptionKey::new(&self.key) {
                 errors.push(format!("Encrypt: Invalid encryption key: {e}"));
             }
@@ -663,8 +653,11 @@ impl OutputState {
                 }
                 if self.http_rate.trim().parse::<u64>().is_err() {
                     errors.push(format!(
-                        "{prefix}HTTP send rate must be a positive integer in milliseconds."
+                        "{prefix}HTTP send rate must be a non-negative integer in milliseconds."
                     ));
+                }
+                if let Err(err) = parse_gui_delimiter(&self.http_delimiter) {
+                    errors.push(format!("{prefix}HTTP record delimiter invalid: {err}"));
                 }
             }
             OutputType::Https => {
@@ -675,8 +668,11 @@ impl OutputState {
                 }
                 if self.https_rate.trim().parse::<u64>().is_err() {
                     errors.push(format!(
-                        "{prefix}HTTPS send rate must be a positive integer in milliseconds."
+                        "{prefix}HTTPS send rate must be a non-negative integer in milliseconds."
                     ));
+                }
+                if let Err(err) = parse_gui_delimiter(&self.https_delimiter) {
+                    errors.push(format!("{prefix}HTTPS record delimiter invalid: {err}"));
                 }
             }
             OutputType::Tls => {
@@ -822,6 +818,103 @@ pub enum PipelineEvent {
 }
 
 /// Helper function to convert GUI states to a [`DatapipeConfig`].
+fn parse_gui_delimiter(input: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('n') => bytes.push(b'\n'),
+                Some('r') => bytes.push(b'\r'),
+                Some('t') => bytes.push(b'\t'),
+                Some('0') => bytes.push(b'\0'),
+                Some('\\') => bytes.push(b'\\'),
+                Some('x') => {
+                    let h1 = chars.next();
+                    let h2 = chars.next();
+                    match (h1, h2) {
+                        (Some(a), Some(b)) => {
+                            let hex_str = [a, b].into_iter().collect::<String>();
+                            let byte = u8::from_str_radix(&hex_str, 16)
+                                .map_err(|_| format!("invalid hex escape '\\x{hex_str}'"))?;
+                            bytes.push(byte);
+                        }
+                        _ => return Err("incomplete '\\xHH' hex escape sequence".to_string()),
+                    }
+                }
+                Some(other) => {
+                    bytes.push(b'\\');
+                    let mut buf = [0u8; 4];
+                    bytes.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+                }
+                None => bytes.push(b'\\'),
+            }
+        } else {
+            let mut buf = [0u8; 4];
+            bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    if bytes.is_empty() {
+        return Err("delimiter must not be empty".to_string());
+    }
+    Ok(bytes)
+}
+
+fn format_gui_delimiter(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\n' => {
+                out.push_str("\\n");
+                i += 1;
+            }
+            b'\r' => {
+                out.push_str("\\r");
+                i += 1;
+            }
+            b'\t' => {
+                out.push_str("\\t");
+                i += 1;
+            }
+            b'\0' => {
+                out.push_str("\\0");
+                i += 1;
+            }
+            b'\\' => {
+                out.push_str("\\\\");
+                i += 1;
+            }
+            0x20..=0x7E => {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+            _ => {
+                let remaining = &bytes[i..];
+                let mut decoded = None;
+                for len in 2..=4 {
+                    if remaining.len() >= len
+                        && let Ok(s) = std::str::from_utf8(&remaining[..len])
+                        && let Some(ch) = s.chars().next()
+                    {
+                        decoded = Some((ch, len));
+                        break;
+                    }
+                }
+                if let Some((ch, len)) = decoded {
+                    out.push(ch);
+                    i += len;
+                } else {
+                    use std::fmt::Write;
+                    let _ = write!(&mut out, "\\x{:02x}", bytes[i]);
+                    i += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
 pub fn states_to_config(
     input: &InputState,
     decrypt: &DecryptState,
@@ -983,6 +1076,7 @@ pub fn states_to_config(
     // Decrypt configuration
     if decrypt.enabled {
         config.decryption_args.decryption_key = Some(decrypt.key.clone());
+        config.decryption_args.decrypt_allow_legacy = decrypt.allow_legacy;
     }
 
     // Encrypt configuration
@@ -1012,12 +1106,22 @@ pub fn states_to_config(
                 if let Ok(rate) = out.http_rate.trim().parse::<u64>() {
                     dest.http_output.http_output_rate = Some(rate);
                 }
+                if let Ok(delimiter) = parse_gui_delimiter(&out.http_delimiter)
+                    && delimiter != b"\n"
+                {
+                    dest.http_output.http_output_delimiter = Some(delimiter);
+                }
                 dest.http_output.http_output_include_delimiter = out.http_include_delimiter;
             }
             OutputType::Https => {
                 dest.output.https_output = Some(out.https_url.trim().to_string());
                 if let Ok(rate) = out.https_rate.trim().parse::<u64>() {
                     dest.https_output.https_output_rate = Some(rate);
+                }
+                if let Ok(delimiter) = parse_gui_delimiter(&out.https_delimiter)
+                    && delimiter != b"\n"
+                {
+                    dest.https_output.https_output_delimiter = Some(delimiter);
                 }
                 dest.https_output.https_output_include_delimiter =
                     Some(out.https_include_delimiter);
@@ -1077,14 +1181,18 @@ pub fn states_to_config(
         output_configs.push(dest);
     }
 
-    if let Some(first) = output_configs.first() {
-        config.output = first.output.clone();
-        config.http_output = first.http_output.clone();
-        config.https_output = first.https_output.clone();
-        config.tls_output = first.tls_output.clone();
-        config.iroh_output = first.iroh_output.clone();
+    if output_configs.len() == 1 {
+        if let Some(first) = output_configs.pop() {
+            config.output = first.output;
+            config.http_output = first.http_output;
+            config.https_output = first.https_output;
+            config.tls_output = first.tls_output;
+            config.iroh_output = first.iroh_output;
+            config.outputs = None;
+        }
+    } else {
+        config.outputs = Some(output_configs);
     }
-    config.outputs = Some(output_configs);
 
     Ok(config)
 }
@@ -1229,6 +1337,7 @@ pub fn load_config_into_states(
         decrypt.enabled = false;
         decrypt.key.clear();
     }
+    decrypt.allow_legacy = config.decryption_args.decrypt_allow_legacy;
 
     // Populate Encrypt
     if let Some(ref key) = config.encryption_args.encryption_key {
@@ -1281,12 +1390,18 @@ fn populate_single_output(dest: &OutputDestinationConfig, state: &mut OutputStat
         if let Some(rate) = dest.http_output.http_output_rate {
             state.http_rate = rate.to_string();
         }
+        if let Some(ref delim) = dest.http_output.http_output_delimiter {
+            state.http_delimiter = format_gui_delimiter(delim);
+        }
         state.http_include_delimiter = dest.http_output.http_output_include_delimiter;
     } else if let Some(ref url) = dest.output.https_output {
         state.output_type = OutputType::Https;
         state.https_url = url.clone();
         if let Some(rate) = dest.https_output.https_output_rate {
             state.https_rate = rate.to_string();
+        }
+        if let Some(ref delim) = dest.https_output.https_output_delimiter {
+            state.https_delimiter = format_gui_delimiter(delim);
         }
         if let Some(include) = dest.https_output.https_output_include_delimiter {
             state.https_include_delimiter = include;
@@ -1422,7 +1537,8 @@ mod tests {
         assert!(state.validate().is_err());
 
         state.generate_key();
-        assert_eq!(state.key.len(), 51);
+        assert!(state.key.starts_with("dpk1:"));
+        assert!(EncryptionKey::new(&state.key).is_ok());
         assert!(state.validate().is_ok());
     }
 
@@ -1452,6 +1568,7 @@ mod tests {
         let decrypt = DecryptState {
             enabled: true,
             key: EncryptionKey::generate().to_string(),
+            allow_legacy: true,
         };
 
         let mut encrypt = EncryptState {
@@ -1494,12 +1611,78 @@ mod tests {
         assert_eq!(loaded_input.file_path, "source.dat");
         assert!(loaded_decrypt.enabled);
         assert_eq!(loaded_decrypt.key, decrypt.key);
+        assert!(loaded_decrypt.allow_legacy);
         assert!(loaded_encrypt.enabled);
         assert_eq!(loaded_encrypt.key, encrypt.key);
         assert_eq!(loaded_outputs.len(), 2);
         assert_eq!(loaded_outputs[0].output_type, OutputType::File);
         assert_eq!(loaded_outputs[0].file_path, "dest1.dat");
         assert_eq!(loaded_outputs[1].output_type, OutputType::Stdout);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_http_delimiter_roundtrip_and_rate_zero() -> Result<(), String> {
+        let input = InputState {
+            input_type: InputType::Http,
+            http_url: "http://127.0.0.1:8080/in".to_string(),
+            http_rate: "0".to_string(),
+            ..Default::default()
+        };
+
+        let out_http = OutputState {
+            output_type: OutputType::Http,
+            http_url: "http://127.0.0.1:8080/out".to_string(),
+            http_rate: "0".to_string(),
+            http_delimiter: "\\r\\n".to_string(),
+            http_include_delimiter: false,
+            ..Default::default()
+        };
+
+        let out_https = OutputState {
+            output_type: OutputType::Https,
+            https_url: "https://127.0.0.1:8443/out".to_string(),
+            https_rate: "0".to_string(),
+            https_delimiter: ",".to_string(),
+            https_include_delimiter: true,
+            ..Default::default()
+        };
+
+        let config = states_to_config(
+            &input,
+            &DecryptState::default(),
+            &EncryptState::default(),
+            &[out_http, out_https],
+        )
+        .map_err(|errs| errs.join("; "))?;
+        config.validate().map_err(|e| e.to_string())?;
+
+        let mut loaded_in = InputState::default();
+        let mut loaded_dec = DecryptState::default();
+        let mut loaded_enc = EncryptState::default();
+        let mut loaded_outs = Vec::new();
+        load_config_into_states(
+            &config,
+            &mut loaded_in,
+            &mut loaded_dec,
+            &mut loaded_enc,
+            &mut loaded_outs,
+        );
+        assert_eq!(loaded_in.http_rate, "0");
+        assert_eq!(loaded_outs[0].http_rate, "0");
+        assert_eq!(loaded_outs[0].http_delimiter, "\\r\\n");
+        assert!(!loaded_outs[0].http_include_delimiter);
+        assert_eq!(loaded_outs[1].https_rate, "0");
+        assert_eq!(loaded_outs[1].https_delimiter, ",");
+
+        let bad_delim = OutputState {
+            output_type: OutputType::Http,
+            http_url: "http://127.0.0.1:8080/out".to_string(),
+            http_delimiter: String::new(),
+            ..Default::default()
+        };
+        assert!(bad_delim.validate(0).is_err());
 
         Ok(())
     }

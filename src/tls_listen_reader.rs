@@ -40,37 +40,42 @@ impl TlsListenReader {
 
 impl InputReader for TlsListenReader {
     async fn read(&mut self) -> Result<Bytes, Error> {
-        if self.maybe_tls_stream.is_none() {
-            info!("Listening for connection");
-            match self.tcp_listener.accept().await {
-                Ok((tcp_stream, address)) => {
-                    info!("TCP connection from {} accepted", address);
-                    info!(
-                        "TcpStream info: Local Addr:{:?}, Peer Addr:{:?}",
-                        tcp_stream.local_addr()?,
-                        tcp_stream.peer_addr()?
-                    );
-                    match self.tls_acceptor.accept(tcp_stream).await {
-                        Ok(tls_stream) => {
-                            info!("Successfully TCP connection upgraded to TLS");
-                            self.maybe_tls_stream = Some(tls_stream);
-                        }
-                        Err(error) => {
-                            let error_message =
-                                format!("Error upgrading connection to TLS: {error}");
-                            error!("{error_message}");
-                            return Err(Error::new(ErrorKind::ConnectionAborted, error_message));
+        let tls_stream = match self.maybe_tls_stream {
+            Some(ref mut stream) => stream,
+            None => {
+                info!("Listening for connection");
+                match self.tcp_listener.accept().await {
+                    Ok((tcp_stream, address)) => {
+                        info!("TCP connection from {} accepted", address);
+                        info!(
+                            "TcpStream info: Local Addr:{:?}, Peer Addr:{:?}",
+                            tcp_stream.local_addr()?,
+                            tcp_stream.peer_addr()?
+                        );
+                        match self.tls_acceptor.accept(tcp_stream).await {
+                            Ok(tls_stream) => {
+                                info!("Successfully TCP connection upgraded to TLS");
+                                self.maybe_tls_stream.insert(tls_stream)
+                            }
+                            Err(error) => {
+                                let error_message =
+                                    format!("Error upgrading connection to TLS: {error}");
+                                error!("{error_message}");
+                                return Err(Error::new(
+                                    ErrorKind::ConnectionAborted,
+                                    error_message,
+                                ));
+                            }
                         }
                     }
-                }
-                Err(error) => {
-                    let error_message = format!("Error accepting TCP connection: {error}");
-                    error!("{error_message}");
-                    return Err(Error::new(ErrorKind::ConnectionAborted, error_message));
+                    Err(error) => {
+                        let error_message = format!("Error accepting TCP connection: {error}");
+                        error!("{error_message}");
+                        return Err(Error::new(ErrorKind::ConnectionAborted, error_message));
+                    }
                 }
             }
-        }
-        let tls_stream = self.maybe_tls_stream.as_mut().unwrap();
+        };
         let mut vec_bytes = [0; TLS_LISTEN_READ_BUFFER_SIZE];
         info!("Attempting to read the stream");
         match tls_stream.read(&mut vec_bytes).await {

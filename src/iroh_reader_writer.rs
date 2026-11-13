@@ -288,17 +288,18 @@ async fn establish_iroh_connection(
         config.target_id
     );
 
-    let connection = endpoint
-        .connect(remote_addr, &config.alpn)
-        .await
-        .map_err(|err| {
+    let connection = match endpoint.connect(remote_addr, &config.alpn).await {
+        Ok(connection) => connection,
+        Err(err) => {
             let msg = format!(
                 "Failed to connect to Iroh endpoint {}: {err}",
                 config.target_id
             );
             error!("{msg}");
-            Error::new(ErrorKind::NotConnected, msg)
-        })?;
+            let _ = tokio::time::timeout(Duration::from_secs(2), endpoint.close()).await;
+            return Err(Error::new(ErrorKind::NotConnected, msg));
+        }
+    };
 
     Ok((endpoint, connection))
 }
@@ -340,7 +341,18 @@ impl IrohReader {
                 let _ = send_stream.finish();
                 Some(recv_stream)
             }
-            Err(_) => None,
+            Err(err) => {
+                if connection.close_reason().is_some() {
+                    let msg = format!("IrohReader connection closed during stream setup: {err}");
+                    error!("{msg}");
+                    let _ = tokio::time::timeout(Duration::from_secs(2), endpoint.close()).await;
+                    return Err(Error::new(ErrorKind::ConnectionAborted, msg));
+                }
+                log::warn!(
+                    "IrohReader initial open_bi failed, falling back to accept_bi/uni: {err}"
+                );
+                None
+            }
         };
 
         Ok(Self {
@@ -491,7 +503,14 @@ impl InputReader for IrohReader {
             }
         }
 
-        if saw_clean_eof {
+        let is_graceful_app_close = match self.connection.close_reason() {
+            None => true,
+            Some(iroh::endpoint::ConnectionError::ApplicationClosed(ref frame)) => {
+                frame.error_code.into_inner() == 0
+            }
+            _ => false,
+        };
+        if saw_clean_eof && (last_err.is_none() || is_graceful_app_close) {
             self.stream_finished = true;
             return Ok(Bytes::new());
         }
@@ -533,11 +552,15 @@ impl IrohWriter {
     /// opening the QUIC stream fails.
     pub async fn new(config: IrohConnectConfig) -> Result<Self, Error> {
         let (endpoint, connection) = establish_iroh_connection(&config).await?;
-        let (send_stream, ack_recv_stream) = connection.open_bi().await.map_err(|err| {
-            let msg = format!("Failed to open Iroh QUIC stream: {err}");
-            error!("{msg}");
-            Error::new(ErrorKind::NotConnected, msg)
-        })?;
+        let (send_stream, ack_recv_stream) = match connection.open_bi().await {
+            Ok(streams) => streams,
+            Err(err) => {
+                let msg = format!("Failed to open Iroh QUIC stream: {err}");
+                error!("{msg}");
+                let _ = tokio::time::timeout(Duration::from_secs(2), endpoint.close()).await;
+                return Err(Error::new(ErrorKind::NotConnected, msg));
+            }
+        };
 
         Ok(Self {
             endpoint,

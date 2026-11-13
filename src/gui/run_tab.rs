@@ -60,7 +60,7 @@ pub fn show_run_tab(ui: &mut Ui, app: &mut crate::gui::DatapipeApp) {
     if start_clicked && let Ok(cfg) = config_res {
         let rt_handle = app.runtime.handle().clone();
         app.controller.start(&rt_handle, cfg);
-        app.last_message = Some(("Datapipe started.".to_string(), false));
+        app.last_message = Some(("Starting datapipe...".to_string(), false));
     }
 
     egui::ScrollArea::vertical()

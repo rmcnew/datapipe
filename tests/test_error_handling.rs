@@ -21,7 +21,7 @@ use datapipe::tcp_reader_writer::TcpReaderWriter;
 use datapipe::tls_reader_writer::TlsReaderWriter;
 use datapipe::udp_reader::UdpReader;
 use datapipe::udp_writer::UdpWriter;
-use datapipe::utilities::get_unused_port;
+use datapipe::utilities::{get_unused_port, identical_contents};
 use datapipe::writer::Writer;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -491,4 +491,34 @@ async fn test_cli_save_to_config_missing_io() {
         "--no-metrics".to_string(),
     ];
     assert!(!run_cli_status(&args).await.success());
+}
+
+#[tokio::test]
+async fn test_cli_use_config_multi_output_fanout() {
+    let test_doc = common::get_test_document();
+    let out1 = TempFileGuard::new("out1");
+    let out2 = TempFileGuard::new("out2");
+    let toml = format!(
+        "[input]\nfile_input = {:?}\n\n[[outputs]]\n[outputs.output]\nfile_output = {:?}\n\n[[outputs]]\n[outputs.output]\nfile_output = {:?}\n",
+        test_doc.to_string_lossy(),
+        out1.path.to_string_lossy(),
+        out2.path.to_string_lossy()
+    );
+    let cfg = TempFileGuard::with_content("toml", toml.as_bytes());
+    let args = vec![
+        "--use-config".to_string(),
+        cfg.path.to_str().unwrap().to_string(),
+        "--no-metrics".to_string(),
+    ];
+    assert!(run_cli_status(&args).await.success());
+    assert!(
+        identical_contents(&test_doc, &out1.path)
+            .await
+            .expect("compare out1")
+    );
+    assert!(
+        identical_contents(&test_doc, &out2.path)
+            .await
+            .expect("compare out2")
+    );
 }
