@@ -7,6 +7,7 @@ description = "Stream data from here to there"
 license = "AGPL-3.0-only"
 repository = "https://github.com/rmcnew/datapipe"
 documentation = "https://docs.rs/datapipe"
+rust-version = "1.97"
 
 
 [lib]
