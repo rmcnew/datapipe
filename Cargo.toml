@@ -1,6 +1,6 @@
 [package]
 name = "datapipe"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 authors = ["Richard Scott McNew"]
 description = "Stream data from here to there"
@@ -18,9 +18,9 @@ aead-stream = { version = "0.6", features = ["alloc"] }
 bytes = { version = "1", features = ["serde"] }
 chacha20poly1305 = { version = "0.11", features = ["alloc"] }
 clap = { version = "4", features = ["derive"] }
-iroh = "1.4"
+iroh = "1.5"
+jiff = "1"
 log = { version = "0.4", features = ["serde"] }
-log4rs = { version = "1", default-features = false, features = ["compound_policy", "console_appender", "fixed_window_roller", "pattern_encoder", "rolling_file_appender", "size_trigger", "threshold_filter"] }
 rand = "0.10"
 rcgen = { version = "0.14", features = ["crypto", "pem"] }
 reqwest = { version = "0.13", features = ["charset", "gzip", "http2", "json", "rustls-no-provider"], default-features = false }

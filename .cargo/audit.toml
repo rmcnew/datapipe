@@ -1,9 +1,10 @@
-# Temporary ignore for RUSTSEC-2024-0436 ("paste - no longer maintained").
-# `paste` is pulled in transitively via iroh -> netwatch (0.19.x) -> netlink-packet-core (0.8.x).
-# `netlink-packet-core` >= 0.9.0 removes `paste`, so remove this ignore once `iroh` updates
-# its `netwatch` / netlink dependencies.
+# Temporary ignore for RUSTSEC-2026-0543 ("chrono is unmaintained").
+# `chrono` is no longer used on Unix targets (`datapipe` uses `jiff` v1 directly),
+# and is pulled in transitively only on Windows (`cfg(target_os = "windows")`) via
+# iroh (1.5.x) -> netwatch (0.20.x) and wmi (0.18.x).
+# Remove this ignore once `iroh` / `netwatch` drop `chrono` and `wmi`'s default `chrono` feature.
 [advisories]
 ignore = [
-    "RUSTSEC-2024-0436",
+    "RUSTSEC-2026-0543",
 ]
 
