@@ -84,8 +84,8 @@ then
     exit 1
 fi
 
-# Check crates.io for a newer version of iroh that updates its netwatch dependency
-# (used to track when transitive dependency paste / RUSTSEC-2024-0436 can be resolved)
+# Check Cargo.lock and crates.io for chrono / iroh / netwatch updates
+# (ensures RUSTSEC-2026-0543 remains isolated to Windows-only netwatch/wmi and flags upstream fixes)
 if command -v python3 >/dev/null 2>&1; then
     if ! python3 - "$(git rev-parse --show-toplevel)/Cargo.lock" <<'PYEOF'
 import json
@@ -93,6 +93,9 @@ import re
 import sys
 import urllib.error
 import urllib.request
+
+MAX_INDEX_BYTES = 16 * 1024 * 1024
+ALLOWED_CHRONO_DEPENDENTS = {"netwatch", "wmi"}
 
 lock_path = sys.argv[1]
 try:
@@ -103,15 +106,26 @@ except OSError as err:
     sys.exit(0)
 
 pkg_versions = {}
+unexpected_chrono_dependents = []
 for block in re.split(r"\n\[\[package\]\]\s*\n", lock_text):
     name_m = re.search(r'^name\s*=\s*"([^"]+)"', block, re.MULTILINE)
     ver_m = re.search(r'^version\s*=\s*"([^"]+)"', block, re.MULTILINE)
     if name_m and ver_m:
-        pkg_versions.setdefault(name_m.group(1), []).append(ver_m.group(1))
+        pkg_name = name_m.group(1)
+        pkg_versions.setdefault(pkg_name, []).append(ver_m.group(1))
+        deps_m = re.search(r"^dependencies\s*=\s*\[(.*?)\]", block, re.MULTILINE | re.DOTALL)
+        if deps_m and re.search(r'"chrono(?:\s|")', deps_m.group(1)):
+            if pkg_name not in ALLOWED_CHRONO_DEPENDENTS:
+                unexpected_chrono_dependents.append(f"{pkg_name} {ver_m.group(1)}")
 
-iroh_versions = pkg_versions.get("iroh", [])
-if not iroh_versions:
-    sys.exit(0)
+if unexpected_chrono_dependents:
+    print(
+        "Error: Unexpected packages depend on `chrono` in Cargo.lock: "
+        + ", ".join(sorted(set(unexpected_chrono_dependents)))
+        + ".\nRUSTSEC-2026-0543 in .cargo/audit.toml is only approved for Windows-only `netwatch` / `wmi`.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 def parse_stable_semver(ver_str):
     core = ver_str.split("+", 1)[0]
@@ -122,75 +136,104 @@ def parse_stable_semver(ver_str):
         return None
     return tuple(int(p) for p in parts)
 
-locked_iroh = iroh_versions[0]
-locked_iroh_tuple = parse_stable_semver(locked_iroh)
-if locked_iroh_tuple is None:
-    sys.exit(0)
-
-locked_netwatch = ", ".join(pkg_versions.get("netwatch", ["unknown"]))
-
-url = "https://index.crates.io/ir/oh/iroh"
-req = urllib.request.Request(url, headers={"User-Agent": "datapipe-pre-commit-hook"})
-try:
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        index_lines = resp.read().decode("utf-8").splitlines()
-except (urllib.error.URLError, TimeoutError, OSError) as err:
-    print(f"Warning: Unable to query crates.io for iroh updates ({err}); skipping iroh/netwatch check.", file=sys.stderr)
-    sys.exit(0)
-
-def netwatch_req(entry):
-    reqs = [
-        d.get("req", "")
-        for d in entry.get("deps", [])
-        if d.get("name") == "netwatch" and d.get("kind", "normal") == "normal"
-    ]
-    return ", ".join(sorted(set(reqs))) if reqs else None
-
-locked_netwatch_req = None
-newer_candidates = []
-for line in index_lines:
-    line = line.strip()
-    if not line:
-        continue
+def fetch_index(index_url, crate_name):
+    req = urllib.request.Request(index_url, headers={"User-Agent": "datapipe-pre-commit-hook"})
     try:
-        entry = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    if entry.get("yanked"):
-        continue
-    vers = entry.get("vers", "")
-    if vers == locked_iroh:
-        locked_netwatch_req = netwatch_req(entry)
-    ver_tuple = parse_stable_semver(vers)
-    if ver_tuple is not None and ver_tuple > locked_iroh_tuple:
-        newer_candidates.append((ver_tuple, vers, netwatch_req(entry)))
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read(MAX_INDEX_BYTES + 1)
+            if len(raw) > MAX_INDEX_BYTES:
+                print(
+                    f"Warning: crates.io index response for {crate_name} exceeded {MAX_INDEX_BYTES} bytes; skipping check.",
+                    file=sys.stderr,
+                )
+                return None
+            return raw.decode("utf-8").splitlines()
+    except (urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError) as err:
+        print(f"Warning: Unable to query crates.io for {crate_name} updates ({err}); skipping check.", file=sys.stderr)
+        return None
 
-if not newer_candidates:
-    sys.exit(0)
+def tracked_dep_reqs(entry, dep_names):
+    reqs = {}
+    for dep_name in dep_names:
+        matched = sorted(
+            {
+                f"{d.get('req', '')} [default_features={bool(d.get('default_features', True))}, features={','.join(sorted(d.get('features', [])))}]"
+                for d in entry.get("deps", [])
+                if d.get("name") == dep_name and d.get("kind", "normal") == "normal"
+            }
+        )
+        reqs[dep_name] = "; ".join(matched) if matched else None
+    return reqs
 
-newer_candidates.sort(key=lambda item: item[0])
-updated_releases = [
-    (vers, nw_req)
-    for _, vers, nw_req in newer_candidates
-    if nw_req != locked_netwatch_req
-]
+def check_crate_updates(crate_name, index_url, tracked_deps):
+    versions = pkg_versions.get(crate_name, [])
+    stable_versions = [
+        (ver_tuple, ver_str)
+        for ver_str in versions
+        if (ver_tuple := parse_stable_semver(ver_str)) is not None
+    ]
+    if not stable_versions:
+        return False
+    locked_tuple, locked_ver = max(stable_versions)
+    lines = fetch_index(index_url, crate_name)
+    if lines is None:
+        return False
 
-if updated_releases:
-    latest_vers, latest_nw_req = updated_releases[-1]
-    old_req_display = locked_netwatch_req if locked_netwatch_req is not None else "<none>"
-    new_req_display = latest_nw_req if latest_nw_req is not None else "<removed>"
+    locked_reqs = None
+    newer_candidates = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("yanked"):
+            continue
+        vers = entry.get("vers", "")
+        reqs = tracked_dep_reqs(entry, tracked_deps)
+        if vers == locked_ver:
+            locked_reqs = reqs
+        ver_tuple = parse_stable_semver(vers)
+        if ver_tuple is not None and ver_tuple > locked_tuple:
+            newer_candidates.append((ver_tuple, vers, reqs))
+
+    if not newer_candidates or locked_reqs is None:
+        return False
+
+    newer_candidates.sort(key=lambda item: item[0])
+    updated_releases = [
+        (vers, reqs)
+        for _, vers, reqs in newer_candidates
+        if reqs != locked_reqs
+    ]
+    if not updated_releases:
+        return False
+
+    latest_vers, latest_reqs = updated_releases[-1]
+    changes = []
+    for dep_name in tracked_deps:
+        if latest_reqs[dep_name] != locked_reqs[dep_name]:
+            old_disp = locked_reqs[dep_name] if locked_reqs[dep_name] is not None else "<none>"
+            new_disp = latest_reqs[dep_name] if latest_reqs[dep_name] is not None else "<removed>"
+            changes.append(f"{dep_name}: {old_disp} -> {new_disp}")
     print(
-        f"Notification: A new version of iroh ({latest_vers}, currently locked: {locked_iroh}) "
-        f"updates the netwatch dependency from {old_req_display} (locked: {locked_netwatch}) "
-        f"to {new_req_display}.\n"
-        "Please update iroh in Cargo.toml / Cargo.lock (e.g. `cargo update -p iroh`) and check "
-        "whether RUSTSEC-2024-0436 (`paste`) can now be removed from .cargo/audit.toml.",
+        f"Notification: A new version of {crate_name} ({latest_vers}, currently locked: {locked_ver}) "
+        f"updates tracked dependencies ({'; '.join(changes)}).\n"
+        f"Please update `Cargo.lock` (e.g. `cargo update -p {crate_name}`) and check "
+        "whether RUSTSEC-2026-0543 (`chrono`) can now be removed from .cargo/audit.toml.",
         file=sys.stderr,
     )
+    return True
+
+iroh_changed = check_crate_updates("iroh", "https://index.crates.io/ir/oh/iroh", ["netwatch"])
+netwatch_changed = check_crate_updates("netwatch", "https://index.crates.io/ne/tw/netwatch", ["chrono", "wmi"])
+if iroh_changed or netwatch_changed:
     sys.exit(1)
 PYEOF
     then
-        echo "Commit stopped: a new iroh release updates netwatch. See notification above."
+        echo "Commit stopped: chrono policy or iroh/netwatch dependency check failed. See notification above."
         exit 1
     fi
 else
